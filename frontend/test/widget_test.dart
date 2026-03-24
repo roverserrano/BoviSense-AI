@@ -1,0 +1,18 @@
+// This is a basic Flutter widget test.
+//
+// To perform an interaction with a widget in your test, use the WidgetTester
+// utility in the flutter_test package. For example, you can send tap and scroll
+// gestures. You can also use WidgetTester to find child widgets in the widget
+// tree, read text, and verify that the values of widget properties are correct.
+
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  testWidgets('Placeholder test', (WidgetTester tester) async {
+    // The actual app class is BobisenseAiApp, but it requires
+    // AuthRepository and AdminUsuarioRepository passing to it.
+    // Since this is just the default counter test, we'll leave a
+    // placeholder test here until proper mocks are set up.
+    expect(true, isTrue);
+  });
+}

@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "357827375010",
+    "project_id": "aplicacion-cabfa",
+    "storage_bucket": "aplicacion-cabfa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:357827375010:android:abcfc3fa0c1ff7f15dccfb",
+        "android_client_info": {
+          "package_name": "com.aplicacionmovil"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUPjrjCmA_44j0YjxFbAv_XoctzDwtiqw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:357827375010:android:00f2f5f7a21fde755dccfb",
+        "android_client_info": {
+          "package_name": "com.example.frontend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUPjrjCmA_44j0YjxFbAv_XoctzDwtiqw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:357827375010:android:e70d9798bb8fb5f25dccfb",
+        "android_client_info": {
+          "package_name": "com.spartano.cattle_app.cattle_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUPjrjCmA_44j0YjxFbAv_XoctzDwtiqw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
