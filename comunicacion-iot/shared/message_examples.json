@@ -1,0 +1,30 @@
+{
+  "ping_request": {
+    "message_id": "example-ping-001",
+    "sequence": 1,
+    "source": "esp32_bridge",
+    "target": "jetson_orin_nano",
+    "command": "PING",
+    "payload": {},
+    "timestamp": 1710000000.0,
+    "checksum": "computed-by-protocol"
+  },
+  "ack_payload": {
+    "status": "ACK",
+    "request_message_id": "example-ping-001",
+    "data": {
+      "alive": true,
+      "node": "jetson_orin_nano"
+    }
+  },
+  "nack_payload": {
+    "status": "NACK",
+    "request_message_id": "example-invalid-001",
+    "data": {},
+    "error": {
+      "code": "COMMAND_NOT_ALLOWED",
+      "message": "Comando no permitido"
+    }
+  }
+}
+

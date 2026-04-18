@@ -10,6 +10,7 @@ import 'data/repositories/admin_usuario_repository.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/ganadero_repository.dart';
 import 'data/services/api_client.dart';
+import 'data/services/esp8266_discovery_service.dart';
 import 'firebase_options.dart';
 import 'viewmodels/admin_usuarios_view_model.dart';
 import 'viewmodels/auth_view_model.dart';
@@ -58,6 +59,9 @@ class BobisenseAiApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider<Esp8266DiscoveryService>(
+          create: (_) => Esp8266DiscoveryService()..start(),
+        ),
         ChangeNotifierProvider<AuthViewModel>(
           create: (_) => AuthViewModel(authRepository)..restoreSession(),
         ),

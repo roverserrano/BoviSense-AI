@@ -2,6 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const admin = require('firebase-admin');
 
+require('dotenv').config({
+    path: path.resolve(__dirname, '../../.env'),
+});
+
 const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
 if (!serviceAccountPath) {
@@ -10,7 +14,9 @@ if (!serviceAccountPath) {
     );
 }
 
-const absoluteServiceAccountPath = path.resolve(serviceAccountPath);
+const absoluteServiceAccountPath = path.isAbsolute(serviceAccountPath)
+    ? serviceAccountPath
+    : path.resolve(__dirname, '../../', serviceAccountPath);
 
 if (!fs.existsSync(absoluteServiceAccountPath)) {
     throw new Error(
@@ -19,6 +25,12 @@ if (!fs.existsSync(absoluteServiceAccountPath)) {
 }
 
 const serviceAccount = require(absoluteServiceAccountPath);
+
+if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
+    throw new Error(
+        'El archivo de cuenta de servicio de Firebase Admin está incompleto.',
+    );
+}
 
 if (!admin.apps.length) {
     admin.initializeApp({

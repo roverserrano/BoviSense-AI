@@ -1,0 +1,18 @@
+{
+  "device": "esp8266",
+  "phase": "wifi_ap_test",
+  "wifi": {
+    "mode": "access_point",
+    "ssid": "BoviSense-ESP8266",
+    "password": "123456789",
+    "ip": "192.168.4.1"
+  },
+  "http": {
+    "port": 80,
+    "routes": ["/", "/ping", "/status"]
+  },
+  "lora": {
+    "enabled": false
+  }
+}
+
