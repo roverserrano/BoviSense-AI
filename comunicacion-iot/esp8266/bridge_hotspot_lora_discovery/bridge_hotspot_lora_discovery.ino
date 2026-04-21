@@ -1,573 +1,514 @@
 /*
-  BoviSense-AI - ESP8266 Hotspot movil <-> LoRa bridge
+  BoviSense-AI - ESP32 BLE <-> LoRa bridge
 
-  Rol del ESP8266:
-  - Conectarse al hotspot del celular para conservar internet en la app movil.
-  - Exponer endpoints HTTP JSON para que la app movil pruebe conexion.
-  - Enviar informacion por LoRa desde la app o desde Serial.
-  - Recibir informacion por LoRa y dejarla disponible para la app.
+  Rol del ESP32:
+  - Anunciarse por BLE como "BoviSense-Bridge".
+  - Recibir comandos de la app movil por una characteristic RX.
+  - Reenviar esos comandos por LoRa 433 MHz.
+  - Escuchar respuestas o eventos LoRa y notificarlos a la app por BLE TX.
 
-  Endpoints para la app:
-  - GET /ping
-  - GET /status
-  - GET /send?msg=texto
-
-  Nota sobre Arduino IDE:
-  Los "SyntaxWarning" de elf2bin.py pertenecen al core ESP8266/Python, no a este
-  sketch. Si el IDE muestra el resumen de memoria, el codigo si compilo.
+  Protocolo:
+  - App -> BLE RX:          CMD:<contenido>
+  - ESP32 -> LoRa:          BRIDGE|<msgId>|<contenido>
+  - Nodo remoto -> LoRa:    RESP|<msgId>|<contenido>
+  - ESP32 -> BLE TX notify: STATUS:<contenido>
+                             LORA_RX:<contenido>
+                             ERROR:<contenido>
 */
 
-#include <ESP8266WiFi.h>
-#include <WiFiUdp.h>
+#if !defined(ARDUINO_ARCH_ESP32)
+#error "Este sketch usa BLE nativo de ESP32. En Arduino IDE selecciona una placa ESP32, por ejemplo 'ESP32 Dev Module' o 'DOIT ESP32 DEVKIT V1'."
+#endif
+
+#include <SPI.h>
 #include <LoRa.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include <esp_bt.h>
+#include <esp_gap_ble_api.h>
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
 
-static const int LORA_CS_PIN = 15;   // NodeMCU D8 / GPIO15
-static const int LORA_RST_PIN = 16;  // NodeMCU D0 / GPIO16
-static const int LORA_DIO0_PIN = 2;  // NodeMCU D4 / GPIO2
+static const char *BLE_DEVICE_NAME = "BoviSense-Bridge";
+static const char *BLE_SERVICE_UUID = "7d2f0001-1f3b-4a9b-8f2a-b05e00000001";
+static const char *BLE_RX_CHAR_UUID = "7d2f0002-1f3b-4a9b-8f2a-b05e00000001";
+static const char *BLE_TX_CHAR_UUID = "7d2f0003-1f3b-4a9b-8f2a-b05e00000001";
 
+static const int LORA_SS_PIN = 5;
+static const int LORA_RST_PIN = 14;
+static const int LORA_DIO0_PIN = 4;
 static const long LORA_FREQUENCY_HZ = 433E6;
-static const byte LOCAL_ADDRESS = 0xBB;   // ESP8266 puente Wi-Fi <-> LoRa
-static const byte REMOTE_ADDRESS = 0xCC;  // Nodo remoto LoRa
-static const byte BROADCAST_ADDRESS = 0xFF;
+static const byte LORA_SYNC_WORD = 0xF3;
 
-static const char *WIFI_SSID = "HONOR X8b";
-static const char *WIFI_PASSWORD = "rover123";
-static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
-static const uint32_t WIFI_RECONNECT_INTERVAL_MS = 10000;
-static const uint16_t HTTP_PORT = 80;
-static const uint16_t DISCOVERY_PORT = 4210;
-static const char *DEVICE_ID = "esp_lora_01";
-static const char *DISCOVERY_PREFIX = "ESP_DISCOVERY";
-static const char *DISCOVERY_REQUEST = "ESP_DISCOVERY_REQUEST";
-static const uint32_t DISCOVERY_INTERVAL_MS = 4000;
+static const size_t MAX_BLE_COMMAND_LENGTH = 180;
+static const size_t MAX_LORA_PAYLOAD_LENGTH = 220;
+static const uint32_t LORA_RESPONSE_TIMEOUT_MS = 8000;
+static const uint32_t BLE_ADVERTISING_CHECK_INTERVAL_MS = 15000;
+static const uint16_t BLE_ADV_MIN_INTERVAL = 0x20;  // 20 ms
+static const uint16_t BLE_ADV_MAX_INTERVAL = 0x40;  // 40 ms
+static const uint32_t LORA_INIT_DELAY_MS = 8000;
+static const uint32_t LORA_INIT_RETRY_MS = 15000;
+static const uint32_t BOOT_STABILIZE_MS = 1500;
+static const uint32_t CPU_FREQUENCY_MHZ = 80;
+static const esp_power_level_t BLE_TX_POWER_LEVEL = ESP_PWR_LVL_N12;
+static const bool DISABLE_BROWNOUT_DETECTOR = true;
+static const char *LORA_TEST_PREFIX = "TEST";
 
-WiFiServer httpServer(HTTP_PORT);
-WiFiUDP discoveryUdp;
+BLEServer *bleServer = nullptr;
+BLECharacteristic *txCharacteristic = nullptr;
 
-String pendingLoraMessage;
-String lastRxMessage;
-String lastRxSender = "0x00";
-int lastRxRssi = 0;
-float lastRxSnr = 0.0;
-bool hasPendingLoraMessage = false;
+bool bleClientConnected = false;
 bool loraReady = false;
+bool waitingForResponse = false;
+bool bleAdvertisingStarted = false;
+bool loraHeldInReset = false;
+
+uint32_t nextMsgId = 1;
+uint32_t pendingMsgId = 0;
+uint32_t pendingSentAt = 0;
 uint32_t txCounter = 0;
 uint32_t rxCounter = 0;
-uint32_t lastWifiReconnectAttempt = 0;
-uint32_t lastDiscoveryBroadcast = 0;
+uint32_t testCounter = 1;
+int lastRxRssi = 0;
+float lastRxSnr = 0.0;
 
-String jsonEscape(const String &value) {
-  String escaped;
-  escaped.reserve(value.length() + 8);
-  for (size_t i = 0; i < value.length(); i++) {
-    const char c = value.charAt(i);
-    switch (c) {
-      case '\\':
-        escaped += F("\\\\");
-        break;
-      case '"':
-        escaped += F("\\\"");
-        break;
-      case '\n':
-        escaped += F("\\n");
-        break;
-      case '\r':
-        escaped += F("\\r");
-        break;
-      case '\t':
-        escaped += F("\\t");
-        break;
-      default:
-        escaped += c;
-        break;
-    }
-  }
-  return escaped;
-}
+String pendingBleCommand;
+bool hasPendingBleCommand = false;
+uint32_t lastBleAdvertisingCheck = 0;
+uint32_t nextLoRaInitAttemptAt = 0;
 
-String hexAddress(byte address) {
-  String value = "0x";
-  if (address < 0x10) {
-    value += "0";
-  }
-  value += String(address, HEX);
-  value.toUpperCase();
-  return value;
-}
+void startBleAdvertising();
+void trySetupLoRaIfDue();
+void holdLoRaInReset();
+void releaseLoRaReset();
+void stabilizePowerBeforeRadios();
 
-int fromHex(char c) {
-  if (c >= '0' && c <= '9') {
-    return c - '0';
-  }
-  if (c >= 'a' && c <= 'f') {
-    return c - 'a' + 10;
-  }
-  if (c >= 'A' && c <= 'F') {
-    return c - 'A' + 10;
-  }
-  return -1;
-}
-
-String urlDecode(const String &value) {
-  String decoded;
-  decoded.reserve(value.length());
-
-  for (size_t i = 0; i < value.length(); i++) {
-    const char c = value.charAt(i);
-    if (c == '+') {
-      decoded += ' ';
-    } else if (c == '%' && i + 2 < value.length()) {
-      const int high = fromHex(value.charAt(i + 1));
-      const int low = fromHex(value.charAt(i + 2));
-      if (high >= 0 && low >= 0) {
-        decoded += (char)((high << 4) | low);
-        i += 2;
-      } else {
-        decoded += c;
-      }
-    } else {
-      decoded += c;
-    }
-  }
-
-  return decoded;
-}
-
-String queryValue(const String &target, const String &name) {
-  const int queryStart = target.indexOf('?');
-  if (queryStart < 0) {
+String valueAfterPrefix(const String &value, const String &prefix) {
+  if (!value.startsWith(prefix)) {
     return "";
   }
 
-  String query = target.substring(queryStart + 1);
-  const String prefix = name + "=";
+  String content = value.substring(prefix.length());
+  content.trim();
+  return content;
+}
+
+String protocolField(const String &payload, int fieldIndex) {
   int start = 0;
 
-  while (start < (int)query.length()) {
-    int end = query.indexOf('&', start);
-    if (end < 0) {
-      end = query.length();
+  for (int i = 0; i < fieldIndex; i++) {
+    start = payload.indexOf('|', start);
+    if (start < 0) {
+      return "";
     }
+    start++;
+  }
 
-    const String part = query.substring(start, end);
-    if (part.startsWith(prefix)) {
-      return urlDecode(part.substring(prefix.length()));
+  int end = payload.indexOf('|', start);
+  if (end < 0) {
+    end = payload.length();
+  }
+
+  return payload.substring(start, end);
+}
+
+String protocolRemainder(const String &payload, int firstFieldIndex) {
+  int start = 0;
+
+  for (int i = 0; i < firstFieldIndex; i++) {
+    start = payload.indexOf('|', start);
+    if (start < 0) {
+      return "";
     }
-    start = end + 1;
+    start++;
   }
 
-  return "";
+  return payload.substring(start);
 }
 
-String pathOnly(const String &target) {
-  const int queryStart = target.indexOf('?');
-  if (queryStart < 0) {
-    return target;
-  }
-  return target.substring(0, queryStart);
-}
+void notifyApp(const String &message) {
+  Serial.print(F("[Bridge] Notificado a la app: "));
+  Serial.println(message);
 
-IPAddress subnetBroadcastIP() {
-  const uint32_t ip = (uint32_t)WiFi.localIP();
-  const uint32_t mask = (uint32_t)WiFi.subnetMask();
-  return IPAddress(ip | ~mask);
-}
-
-const __FlashStringHelper *statusText(int code) {
-  switch (code) {
-    case 200:
-      return F("OK");
-    case 202:
-      return F("Accepted");
-    case 400:
-      return F("Bad Request");
-    case 404:
-      return F("Not Found");
-    case 405:
-      return F("Method Not Allowed");
-    default:
-      return F("OK");
-  }
-}
-
-void sendHttpJson(WiFiClient &client, int code, const String &body) {
-  client.print(F("HTTP/1.1 "));
-  client.print(code);
-  client.print(' ');
-  client.println(statusText(code));
-  client.println(F("Content-Type: application/json"));
-  client.println(F("Connection: close"));
-  client.print(F("Content-Length: "));
-  client.println(body.length());
-  client.println();
-  client.print(body);
-}
-
-void queueLoraMessage(const String &message) {
-  String cleanMessage = message;
-  cleanMessage.trim();
-  if (cleanMessage.length() == 0) {
+  if (!bleClientConnected || txCharacteristic == nullptr) {
+    Serial.println(F("[BLE] Sin cliente conectado; notificacion omitida"));
     return;
   }
 
-  if (cleanMessage.length() > 220) {
-    cleanMessage = cleanMessage.substring(0, 220);
-  }
-
-  pendingLoraMessage = cleanMessage;
-  hasPendingLoraMessage = true;
+  txCharacteristic->setValue(message.c_str());
+  txCharacteristic->notify();
 }
 
-bool sendLoraMessage(const String &message) {
+bool sendLoRaMessage(const String &payload) {
   if (!loraReady) {
-    Serial.println(F("LoRa TX cancelado: modulo no iniciado"));
+    Serial.println(F("[LoRa] ERROR: modulo no iniciado"));
+    notifyApp(F("ERROR:LoRa no iniciado"));
     return false;
   }
 
+  if (payload.length() == 0) {
+    Serial.println(F("[LoRa] ERROR: payload vacio"));
+    notifyApp(F("ERROR:payload LoRa vacio"));
+    return false;
+  }
+
+  if (payload.length() > MAX_LORA_PAYLOAD_LENGTH) {
+    Serial.println(F("[LoRa] ERROR: payload demasiado largo"));
+    notifyApp(F("ERROR:payload LoRa demasiado largo"));
+    return false;
+  }
+
+  LoRa.idle();
   LoRa.beginPacket();
-  LoRa.write(REMOTE_ADDRESS);
-  LoRa.write(LOCAL_ADDRESS);
-  LoRa.print(message);
-  LoRa.endPacket();
+  LoRa.print(payload);
+  const int result = LoRa.endPacket();
+  LoRa.receive();
+
+  if (result == 0) {
+    Serial.println(F("[LoRa] ERROR: fallo al finalizar paquete"));
+    notifyApp(F("ERROR:fallo al enviar por LoRa"));
+    return false;
+  }
 
   txCounter++;
-  Serial.print(F("LoRa TX -> "));
-  Serial.print(hexAddress(REMOTE_ADDRESS));
-  Serial.print(F(": "));
-  Serial.println(message);
+  Serial.print(F("[LoRa] Enviado: "));
+  Serial.println(payload);
   return true;
 }
 
-void handleLoraReceive(int packetSize) {
-  if (packetSize == 0) {
+String buildTestPayload(const String &content) {
+  String payload = LORA_TEST_PREFIX;
+  payload += F("|");
+  payload += String(testCounter++);
+  payload += F("|uptime=");
+  payload += String(millis());
+  payload += F("|msg=");
+  payload += content;
+  return payload;
+}
+
+void handleBleCommand(const String &rawCommand) {
+  String command = rawCommand;
+  command.trim();
+
+  Serial.print(F("[BLE] Comando recibido: "));
+  Serial.println(command);
+
+  if (command.length() == 0) {
+    notifyApp(F("ERROR:comando BLE vacio"));
     return;
   }
 
-  const int recipient = LoRa.read();
-  const byte sender = LoRa.read();
+  String content = valueAfterPrefix(command, F("CMD:"));
+  if (content.length() == 0) {
+    notifyApp(F("ERROR:formato esperado CMD:<contenido>"));
+    Serial.println(F("[BLE] ERROR: formato esperado CMD:<contenido>"));
+    return;
+  }
+
+  if (content.length() > MAX_BLE_COMMAND_LENGTH) {
+    notifyApp(F("ERROR:comando demasiado largo"));
+    Serial.println(F("[BLE] ERROR: comando demasiado largo"));
+    return;
+  }
+
+  if (waitingForResponse &&
+      millis() - pendingSentAt < LORA_RESPONSE_TIMEOUT_MS) {
+    notifyApp(String(F("ERROR:busy esperando respuesta msgId=")) + String(pendingMsgId));
+    Serial.println(F("[Bridge] Ocupado esperando respuesta LoRa"));
+    return;
+  }
+
+  const bool isTestCommand =
+    content.equalsIgnoreCase(F("PING")) ||
+    content.equalsIgnoreCase(F("TEST")) ||
+    content.startsWith(F("TEST:"));
+
+  const uint32_t msgId = nextMsgId++;
+  String loraPayload;
+  if (isTestCommand) {
+    const String testContent = content.startsWith(F("TEST:"))
+      ? content.substring(5)
+      : content;
+    loraPayload = buildTestPayload(testContent);
+  } else {
+    loraPayload = String(F("BRIDGE|")) + String(msgId) + F("|") + content;
+  }
+
+  if (loraPayload.length() > MAX_LORA_PAYLOAD_LENGTH) {
+    notifyApp(F("ERROR:payload final excede limite LoRa"));
+    Serial.println(F("[Bridge] ERROR: payload final excede limite LoRa"));
+    return;
+  }
+
+  notifyApp(String(F("STATUS:comando recibido msgId=")) + String(msgId));
+
+  if (!sendLoRaMessage(loraPayload)) {
+    notifyApp(String(F("ERROR:fallo envio LoRa msgId=")) + String(msgId));
+    return;
+  }
+
+  if (isTestCommand) {
+    notifyApp(String(F("STATUS:test LoRa enviado payload=")) + loraPayload);
+    return;
+  }
+
+  pendingMsgId = msgId;
+  pendingSentAt = millis();
+  waitingForResponse = true;
+  notifyApp(String(F("STATUS:enviado por LoRa msgId=")) + String(msgId));
+}
+
+void handleLoRaPayload(const String &payload) {
+  rxCounter++;
+  lastRxRssi = LoRa.packetRssi();
+  lastRxSnr = LoRa.packetSnr();
+
+  Serial.print(F("[LoRa] Recibido: "));
+  Serial.print(payload);
+  Serial.print(F(" | RSSI="));
+  Serial.print(lastRxRssi);
+  Serial.print(F(" dBm | SNR="));
+  Serial.println(lastRxSnr, 2);
+
+  if (payload.startsWith(F("RESP|"))) {
+    const String msgIdText = protocolField(payload, 1);
+    const String content = protocolRemainder(payload, 2);
+    const uint32_t msgId = (uint32_t)msgIdText.toInt();
+
+    if (waitingForResponse && msgId == pendingMsgId) {
+      waitingForResponse = false;
+      notifyApp(String(F("STATUS:respondido msgId=")) + String(msgId));
+    }
+
+    notifyApp(String(F("LORA_RX:")) + content);
+    return;
+  }
+
+  notifyApp(String(F("LORA_RX:")) + payload);
+}
+
+void pollLoRa() {
+  if (!loraReady) {
+    return;
+  }
+
+  const int packetSize = LoRa.parsePacket();
+  if (packetSize <= 0) {
+    return;
+  }
 
   String incoming;
   incoming.reserve(packetSize);
   while (LoRa.available()) {
     incoming += (char)LoRa.read();
   }
+  incoming.trim();
 
-  if (recipient != LOCAL_ADDRESS && recipient != BROADCAST_ADDRESS) {
-    Serial.print(F("Paquete LoRa ignorado. Destino: 0x"));
-    Serial.println(recipient, HEX);
+  if (incoming.length() == 0) {
+    Serial.println(F("[LoRa] Paquete vacio ignorado"));
     return;
   }
 
-  rxCounter++;
-  lastRxMessage = incoming;
-  lastRxSender = hexAddress(sender);
-  lastRxRssi = LoRa.packetRssi();
-  lastRxSnr = LoRa.packetSnr();
-
-  Serial.print(F("LoRa RX <- "));
-  Serial.print(lastRxSender);
-  Serial.print(F(": "));
-  Serial.println(incoming);
+  handleLoRaPayload(incoming);
 }
 
-String buildStatusJson() {
-  String json = "{";
-  json += F("\"device\":\"esp8266\",");
-  json += F("\"id\":\"");
-  json += DEVICE_ID;
-  json += F("\",");
-  json += F("\"mode\":\"wifi_sta_lora_bridge\",");
-  json += F("\"ssid\":\"");
-  json += WIFI_SSID;
-  json += F("\",");
-  json += F("\"ip\":\"");
-  json += WiFi.localIP().toString();
-  json += F("\",");
-  json += F("\"wifiConnected\":");
-  if (WiFi.status() == WL_CONNECTED) {
-    json += F("true");
-  } else {
-    json += F("false");
-  }
-  json += F(",");
-  json += F("\"wifiRssi\":");
-  json += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
-  json += F(",");
-  json += F("\"loraReady\":");
-  if (loraReady) {
-    json += F("true");
-  } else {
-    json += F("false");
-  }
-  json += F(",");
-  json += F("\"localAddress\":\"");
-  json += hexAddress(LOCAL_ADDRESS);
-  json += F("\",");
-  json += F("\"remoteAddress\":\"");
-  json += hexAddress(REMOTE_ADDRESS);
-  json += F("\",");
-  json += F("\"tx\":");
-  json += String(txCounter);
-  json += F(",");
-  json += F("\"rx\":");
-  json += String(rxCounter);
-  json += F(",");
-  json += F("\"lastRxMessage\":\"");
-  json += jsonEscape(lastRxMessage);
-  json += F("\",");
-  json += F("\"lastRxSender\":\"");
-  json += lastRxSender;
-  json += F("\",");
-  json += F("\"lastRxRssi\":");
-  json += String(lastRxRssi);
-  json += F(",");
-  json += F("\"lastRxSnr\":");
-  json += String(lastRxSnr, 2);
-  json += F("}");
-  return json;
-}
-
-void handleRoot(WiFiClient &client) {
-  sendHttpJson(client, 200, F("{\"device\":\"esp8266\",\"service\":\"bovisense_wifi_lora_bridge\"}"));
-}
-
-void handlePing(WiFiClient &client) {
-  sendHttpJson(client, 200, F("{\"ok\":true,\"message\":\"ESP8266 activo\"}"));
-}
-
-void handleStatus(WiFiClient &client) {
-  sendHttpJson(client, 200, buildStatusJson());
-}
-
-void handleSend(WiFiClient &client, const String &target) {
-  const String message = queryValue(target, "msg");
-  if (message.length() == 0) {
-    sendHttpJson(client, 400, F("{\"queued\":false,\"error\":\"Falta parametro msg\"}"));
+void checkLoRaTimeout() {
+  if (!waitingForResponse) {
     return;
   }
 
-  queueLoraMessage(message);
-  sendHttpJson(client, 202, F("{\"queued\":true}"));
-}
-
-void consumeHeaders(WiFiClient &client) {
-  uint32_t startedAt = millis();
-  while (client.connected() && millis() - startedAt < 150) {
-    if (!client.available()) {
-      delay(1);
-      continue;
-    }
-
-    String line = client.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) {
-      return;
-    }
-  }
-}
-
-void handleHttpClient() {
-  WiFiClient client = httpServer.available();
-  if (!client) {
+  if (millis() - pendingSentAt < LORA_RESPONSE_TIMEOUT_MS) {
     return;
   }
 
-  client.setTimeout(120);
-  String requestLine = client.readStringUntil('\n');
-  requestLine.trim();
-  consumeHeaders(client);
+  const uint32_t timedOutMsgId = pendingMsgId;
+  waitingForResponse = false;
+  pendingMsgId = 0;
 
-  const int firstSpace = requestLine.indexOf(' ');
-  const int secondSpace = requestLine.indexOf(' ', firstSpace + 1);
-  if (firstSpace < 0 || secondSpace < 0) {
-    sendHttpJson(client, 400, F("{\"error\":\"BAD_REQUEST\"}"));
-    client.stop();
-    return;
-  }
-
-  const String method = requestLine.substring(0, firstSpace);
-  const String target = requestLine.substring(firstSpace + 1, secondSpace);
-  const String path = pathOnly(target);
-
-  if (method != "GET") {
-    sendHttpJson(client, 405, F("{\"error\":\"METHOD_NOT_ALLOWED\"}"));
-  } else if (path == "/") {
-    handleRoot(client);
-  } else if (path == "/ping") {
-    handlePing(client);
-  } else if (path == "/status") {
-    handleStatus(client);
-  } else if (path == "/send") {
-    handleSend(client, target);
-  } else {
-    sendHttpJson(client, 404, F("{\"error\":\"NOT_FOUND\"}"));
-  }
-
-  delay(1);
-  client.stop();
+  Serial.print(F("[Bridge] Timeout esperando respuesta msgId="));
+  Serial.println(timedOutMsgId);
+  notifyApp(String(F("ERROR:timeout msgId=")) + String(timedOutMsgId));
 }
 
-void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) {
+class BridgeServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *server) {
+    bleClientConnected = true;
+    bleAdvertisingStarted = false;
+    Serial.println(F("[BLE] Cliente conectado"));
+    notifyApp(F("STATUS:BLE conectado"));
+  }
+
+  void onDisconnect(BLEServer *server) {
+    bleClientConnected = false;
+    bleAdvertisingStarted = false;
+    Serial.println(F("[BLE] Cliente desconectado"));
+    startBleAdvertising();
+  }
+};
+
+class BridgeRxCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) {
+    pendingBleCommand = String(characteristic->getValue().c_str());
+    hasPendingBleCommand = true;
+  }
+};
+
+void startBleAdvertising() {
+  BLEAdvertising *advertising = BLEDevice::getAdvertising();
+  const bool started = advertising->start();
+  if (!started) {
+    Serial.println(F("[BLE] ERROR: no se pudo iniciar advertising"));
     return;
   }
+  bleAdvertisingStarted = true;
 
-  Serial.print(F("Conectando al hotspot: "));
-  Serial.println(WIFI_SSID);
-
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  const uint32_t startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startedAt < WIFI_CONNECT_TIMEOUT_MS) {
-    delay(500);
-    Serial.print('.');
-  }
-  Serial.println();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println(F("ERROR: no se pudo conectar al hotspot"));
-    return;
-  }
-
-  Serial.print(F("Wi-Fi conectado. IP del ESP8266: "));
-  Serial.println(WiFi.localIP());
-  Serial.print(F("RSSI: "));
-  Serial.print(WiFi.RSSI());
-  Serial.println(F(" dBm"));
+  Serial.print(F("[BLE] Advertising activo. Nombre: "));
+  Serial.print(BLE_DEVICE_NAME);
+  Serial.print(F(" | Service UUID: "));
+  Serial.println(BLE_SERVICE_UUID);
 }
 
-void ensureWiFiConnected() {
-  if (WiFi.status() == WL_CONNECTED) {
+void ensureBleAdvertising() {
+  if (bleClientConnected || bleAdvertisingStarted) {
     return;
   }
 
   const uint32_t now = millis();
-  if (now - lastWifiReconnectAttempt < WIFI_RECONNECT_INTERVAL_MS) {
+  if (now - lastBleAdvertisingCheck < BLE_ADVERTISING_CHECK_INTERVAL_MS) {
     return;
   }
 
-  lastWifiReconnectAttempt = now;
-  Serial.println(F("Wi-Fi desconectado. Reintentando conexion..."));
-  connectWiFi();
+  lastBleAdvertisingCheck = now;
+  startBleAdvertising();
 }
 
-String buildDiscoveryMessage() {
-  String message = DISCOVERY_PREFIX;
-  message += F("|device=esp8266|ip=");
-  message += WiFi.localIP().toString();
-  message += F("|port=");
-  message += String(HTTP_PORT);
-  message += F("|id=");
-  message += DEVICE_ID;
-  return message;
+void setupBLE() {
+  Serial.println(F("[BLE] Liberando memoria de Bluetooth clasico"));
+  esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+
+  Serial.println(F("[BLE] BLEDevice::init..."));
+  BLEDevice::init(BLE_DEVICE_NAME);
+  Serial.println(F("[BLE] BLEDevice::init OK"));
+
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, BLE_TX_POWER_LEVEL);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, BLE_TX_POWER_LEVEL);
+
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new BridgeServerCallbacks());
+
+  BLEService *service = bleServer->createService(BLE_SERVICE_UUID);
+
+  BLECharacteristic *rxCharacteristic = service->createCharacteristic(
+    BLE_RX_CHAR_UUID,
+    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  rxCharacteristic->setCallbacks(new BridgeRxCallbacks());
+
+  txCharacteristic = service->createCharacteristic(
+    BLE_TX_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  txCharacteristic->addDescriptor(new BLE2902());
+  txCharacteristic->setValue("STATUS:bridge listo");
+
+  service->start();
+
+  BLEAdvertising *advertising = BLEDevice::getAdvertising();
+  advertising->reset();
+  // Keep advertising config simple and robust: device name comes from BLEDevice::init().
+  advertising->addServiceUUID(BLE_SERVICE_UUID);
+  advertising->setScanResponse(true);
+  advertising->setMinPreferred(0x06);
+  advertising->setMinPreferred(0x12);
+  advertising->setMinInterval(BLE_ADV_MIN_INTERVAL);
+  advertising->setMaxInterval(BLE_ADV_MAX_INTERVAL);
+  startBleAdvertising();
+
+  Serial.print(F("[BLE] Servidor iniciado como "));
+  Serial.println(BLE_DEVICE_NAME);
+  Serial.print(F("[BLE] Service UUID: "));
+  Serial.println(BLE_SERVICE_UUID);
+  Serial.print(F("[BLE] RX UUID: "));
+  Serial.println(BLE_RX_CHAR_UUID);
+  Serial.print(F("[BLE] TX UUID: "));
+  Serial.println(BLE_TX_CHAR_UUID);
+  Serial.print(F("[BLE] TX power level: "));
+  Serial.println((int)BLE_TX_POWER_LEVEL);
 }
 
-void sendDiscoveryPacket(const IPAddress &targetIp, const String &message) {
-  discoveryUdp.beginPacket(targetIp, DISCOVERY_PORT);
-  discoveryUdp.print(message);
-  discoveryUdp.endPacket();
-}
+void setupLoRa() {
+  releaseLoRaReset();
+  LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
 
-void handleDiscoveryUdp() {
-  const int packetSize = discoveryUdp.parsePacket();
-  if (packetSize <= 0) {
-    return;
-  }
-
-  String request;
-  request.reserve(packetSize);
-  while (discoveryUdp.available()) {
-    request += (char)discoveryUdp.read();
-  }
-  request.trim();
-
-  if (request != DISCOVERY_REQUEST) {
-    Serial.print(F("UDP discovery ignorado: "));
-    Serial.println(request);
-    return;
-  }
-
-  const String response = buildDiscoveryMessage();
-  const IPAddress remoteIp = discoveryUdp.remoteIP();
-  const uint16_t remotePort = discoveryUdp.remotePort();
-
-  discoveryUdp.beginPacket(remoteIp, remotePort);
-  discoveryUdp.print(response);
-  discoveryUdp.endPacket();
-
-  Serial.print(F("UDP discovery respuesta -> "));
-  Serial.print(remoteIp);
-  Serial.print(':');
-  Serial.print(remotePort);
-  Serial.print(F(" | "));
-  Serial.println(response);
-}
-
-void announceDiscovery(bool force = false) {
-  if (WiFi.status() != WL_CONNECTED) {
-    return;
-  }
-
-  const uint32_t now = millis();
-  if (!force && now - lastDiscoveryBroadcast < DISCOVERY_INTERVAL_MS) {
-    return;
-  }
-
-  lastDiscoveryBroadcast = now;
-  const String message = buildDiscoveryMessage();
-  const IPAddress subnetBroadcast = subnetBroadcastIP();
-  const IPAddress gateway = WiFi.gatewayIP();
-
-  sendDiscoveryPacket(subnetBroadcast, message);
-  sendDiscoveryPacket(IPAddress(255, 255, 255, 255), message);
-
-  // En modo hotspot, el telefono suele ser el gateway. Este unicast evita
-  // modelos Android que no entregan broadcast local a las apps del telefono.
-  if (gateway != IPAddress(0, 0, 0, 0)) {
-    sendDiscoveryPacket(gateway, message);
-  }
-
-  Serial.print(F("UDP discovery enviado: "));
-  Serial.println(message);
-}
-
-void initWiFiStation() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
-  WiFi.hostname("BoviSense-ESP8266");
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
-
-  Serial.println();
-  Serial.println(F("BoviSense ESP8266 Hotspot movil <-> LoRa"));
-  Serial.print(F("Hotspot SSID: "));
-  Serial.println(WIFI_SSID);
-  connectWiFi();
-  announceDiscovery(true);
-}
-
-void initLoRa() {
-  LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
   if (!LoRa.begin(LORA_FREQUENCY_HZ)) {
     loraReady = false;
-    Serial.println(F("ERROR: no se pudo inicializar LoRa SX1278"));
+    Serial.println(F("[LoRa] ERROR: no se pudo inicializar LoRa SX1278"));
+    notifyApp(F("ERROR:LoRa no iniciado"));
     return;
   }
 
+  LoRa.setSyncWord(LORA_SYNC_WORD);
   LoRa.enableCrc();
+  LoRa.receive();
+
   loraReady = true;
-  Serial.println(F("LoRa SX1278 inicializado"));
+  Serial.println(F("[LoRa] SX1278 inicializado"));
+  Serial.println(F("[LoRa] Frecuencia: 433 MHz"));
+  Serial.println(F("[LoRa] Pines: SS=5 RST=14 DIO0=4"));
+  Serial.println(F("[LoRa] Sync word: 0xF3"));
+  notifyApp(F("STATUS:LoRa iniciado"));
 }
 
-void initHttpServer() {
-  discoveryUdp.begin(DISCOVERY_PORT);
-  Serial.print(F("UDP discovery escuchando en puerto "));
-  Serial.println(DISCOVERY_PORT);
+void holdLoRaInReset() {
+  pinMode(LORA_RST_PIN, OUTPUT);
+  digitalWrite(LORA_RST_PIN, LOW);
+  loraHeldInReset = true;
+  Serial.println(F("[LoRa] RST en LOW para reducir consumo durante arranque"));
+}
 
-  httpServer.begin();
-  httpServer.setNoDelay(true);
-  Serial.println(F("Servidor HTTP JSON minimo iniciado en puerto 80"));
+void releaseLoRaReset() {
+  if (!loraHeldInReset) {
+    return;
+  }
+
+  digitalWrite(LORA_RST_PIN, HIGH);
+  delay(20);
+  loraHeldInReset = false;
+  Serial.println(F("[LoRa] RST liberado (HIGH)"));
+}
+
+void stabilizePowerBeforeRadios() {
+  setCpuFrequencyMhz(CPU_FREQUENCY_MHZ);
+  Serial.print(F("[Boot] CPU MHz: "));
+  Serial.println(getCpuFrequencyMhz());
+
+  if (DISABLE_BROWNOUT_DETECTOR) {
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    Serial.println(F("[Boot] Brownout detector desactivado por baja alimentacion"));
+  }
+
+  delay(BOOT_STABILIZE_MS);
+}
+
+void trySetupLoRaIfDue() {
+  if (loraReady) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (now < nextLoRaInitAttemptAt) {
+    return;
+  }
+
+  Serial.println(F("[LoRa] Intentando inicializar modulo..."));
+  setupLoRa();
+
+  if (!loraReady) {
+    nextLoRaInitAttemptAt = now + LORA_INIT_RETRY_MS;
+    Serial.print(F("[LoRa] Reintento programado en ms: "));
+    Serial.println(LORA_INIT_RETRY_MS);
+  }
 }
 
 void setup() {
@@ -575,30 +516,33 @@ void setup() {
   Serial.setTimeout(80);
   delay(500);
 
-  initWiFiStation();
-  initLoRa();
-  initHttpServer();
+  Serial.println();
+  Serial.println(F("BoviSense ESP32 BLE <-> LoRa bridge"));
+
+  holdLoRaInReset();
+  stabilizePowerBeforeRadios();
+  Serial.println(F("[Boot] Inicializando BLE..."));
+  setupBLE();
+  Serial.print(F("[Boot] LoRa diferido. Primer intento en ms: "));
+  Serial.println(LORA_INIT_DELAY_MS);
+  nextLoRaInitAttemptAt = millis() + LORA_INIT_DELAY_MS;
 }
 
 void loop() {
-  ensureWiFiConnected();
-  handleDiscoveryUdp();
-  announceDiscovery();
-  handleHttpClient();
-
-  if (hasPendingLoraMessage) {
-    const String message = pendingLoraMessage;
-    pendingLoraMessage = "";
-    hasPendingLoraMessage = false;
-    sendLoraMessage(message);
+  if (hasPendingBleCommand) {
+    const String command = pendingBleCommand;
+    pendingBleCommand = "";
+    hasPendingBleCommand = false;
+    handleBleCommand(command);
   }
 
   if (Serial.available()) {
-    const String serialMessage = Serial.readStringUntil('\n');
-    queueLoraMessage(serialMessage);
+    const String serialCommand = Serial.readStringUntil('\n');
+    handleBleCommand(serialCommand);
   }
 
-  if (loraReady) {
-    handleLoraReceive(LoRa.parsePacket());
-  }
+  pollLoRa();
+  checkLoRaTimeout();
+  ensureBleAdvertising();
+  trySetupLoRaIfDue();
 }
