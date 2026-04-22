@@ -72,9 +72,25 @@ class JetsonCountSnapshot {
   final String rawMessage;
 
   String get status => fields['status'] ?? 'UNKNOWN';
+  String get sessionId => fields['session'] ?? fields['sessionId'] ?? 'none';
+  String get pid => fields['pid'] ?? 'No disponible';
+  String get elapsedSec => fields['elapsed'] ?? fields['elapsedSec'] ?? '0';
+  String get count => fields['count'] ?? 'unknown';
+  String get reason => fields['reason'] ?? fields['finishReason'] ?? '';
   String get detail => fields['detail'] ?? 'Sin detalle';
   bool get started => status == 'STARTED' || status == 'RUNNING';
+  bool get running => status == 'STARTED' || status == 'RUNNING';
+  bool get finalResult => status == 'STOPPED' || status == 'RESULT';
   bool get failed => status == 'ERROR';
+  bool get busy => status == 'BUSY';
+  bool get ready => status == 'READY';
+
+  String get countLabel {
+    if (count.isEmpty || count == 'unknown' || count == 'null') {
+      return 'No disponible';
+    }
+    return count;
+  }
 }
 
 class Esp32BleBridgeService extends ChangeNotifier {
@@ -220,6 +236,16 @@ class Esp32BleBridgeService extends ChangeNotifier {
     );
     _addEvent(payload, 'APP_TX');
   }
+
+  Future<void> prepareCounting() => sendCommand('PREPARARCONTEO');
+
+  Future<void> startCounting() => sendCommand('INICIARCONTEO');
+
+  Future<void> stopCounting() => sendCommand('DETENERCONTEO');
+
+  Future<void> requestCountingStatus() => sendCommand('ESTADOCONTEO');
+
+  Future<void> requestCountingResult() => sendCommand('RESULTADOCONTEO');
 
   Future<bool> _requestPermissions() async {
     if (!Platform.isAndroid) {

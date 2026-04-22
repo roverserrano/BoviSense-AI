@@ -18,10 +18,12 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
   );
   bool _isSendingCommand = false;
   bool _isCheckingPrototypeStatus = false;
-  bool _isStartingCount = false;
   bool _countOrderSent = false;
   bool _prototypeStatusSent = false;
+  String? _countActionLabel;
   String? _bridgeError;
+
+  bool get _isCountCommandInFlight => _countActionLabel != null;
 
   @override
   void initState() {
@@ -130,16 +132,32 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
   }
 
   Future<void> _startCounting(Esp32BleBridgeService bridge) async {
+    await _sendCountCommand(
+      bridge,
+      command: 'INICIARCONTEO',
+      inProgressLabel: 'Iniciando conteo',
+      markStartSent: true,
+    );
+  }
+
+  Future<void> _sendCountCommand(
+    Esp32BleBridgeService bridge, {
+    required String command,
+    required String inProgressLabel,
+    bool markStartSent = false,
+  }) async {
     setState(() {
-      _isStartingCount = true;
-      _countOrderSent = false;
+      _countActionLabel = inProgressLabel;
+      if (markStartSent) {
+        _countOrderSent = false;
+      }
       _bridgeError = null;
     });
 
     try {
-      _commandController.text = 'INICIARCONTEO';
+      _commandController.text = command;
       final sent = await _sendCommand(bridge);
-      if (mounted && sent) {
+      if (mounted && sent && markStartSent) {
         setState(() {
           _countOrderSent = true;
         });
@@ -147,7 +165,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     } finally {
       if (mounted) {
         setState(() {
-          _isStartingCount = false;
+          _countActionLabel = null;
         });
       }
     }
@@ -233,7 +251,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                         !bridge.isConnected ||
                             _isSendingCommand ||
                             _isCheckingPrototypeStatus ||
-                            _isStartingCount
+                            _isCountCommandInFlight
                         ? null
                         : () => _sendPrototypeStatus(bridge),
                     icon: _isCheckingPrototypeStatus
@@ -256,27 +274,34 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed:
-                        !bridge.isConnected ||
-                            _isSendingCommand ||
-                            _isCheckingPrototypeStatus ||
-                            _isStartingCount
-                        ? null
-                        : () => _startCounting(bridge),
-                    icon: _isStartingCount
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.play_arrow_rounded),
-                    label: Text(
-                      _isStartingCount
-                          ? 'Enviando orden'
-                          : _countOrderSent
-                          ? 'Orden enviada'
-                          : 'Iniciar conteo',
+                  _CountCommandBar(
+                    bridge: bridge,
+                    busy:
+                        _isSendingCommand ||
+                        _isCheckingPrototypeStatus ||
+                        _isCountCommandInFlight,
+                    busyLabel: _countActionLabel,
+                    startSent: _countOrderSent,
+                    onPrepare: () => _sendCountCommand(
+                      bridge,
+                      command: 'PREPARARCONTEO',
+                      inProgressLabel: 'Preparando conteo',
+                    ),
+                    onStart: () => _startCounting(bridge),
+                    onStop: () => _sendCountCommand(
+                      bridge,
+                      command: 'DETENERCONTEO',
+                      inProgressLabel: 'Deteniendo conteo',
+                    ),
+                    onStatus: () => _sendCountCommand(
+                      bridge,
+                      command: 'ESTADOCONTEO',
+                      inProgressLabel: 'Consultando conteo',
+                    ),
+                    onResult: () => _sendCountCommand(
+                      bridge,
+                      command: 'RESULTADOCONTEO',
+                      inProgressLabel: 'Consultando resultado',
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -337,7 +362,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                             !bridge.isConnected ||
                                 _isSendingCommand ||
                                 _isCheckingPrototypeStatus ||
-                                _isStartingCount
+                                _isCountCommandInFlight
                             ? null
                             : () => _sendCommand(bridge),
                         icon: _isSendingCommand
@@ -484,6 +509,108 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
   }
 }
 
+class _CountCommandBar extends StatelessWidget {
+  const _CountCommandBar({
+    required this.bridge,
+    required this.busy,
+    required this.busyLabel,
+    required this.startSent,
+    required this.onPrepare,
+    required this.onStart,
+    required this.onStop,
+    required this.onStatus,
+    required this.onResult,
+  });
+
+  final Esp32BleBridgeService bridge;
+  final bool busy;
+  final String? busyLabel;
+  final bool startSent;
+  final VoidCallback onPrepare;
+  final VoidCallback onStart;
+  final VoidCallback onStop;
+  final VoidCallback onStatus;
+  final VoidCallback onResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = bridge.isConnected && !busy;
+
+    Widget actionButton({
+      required IconData icon,
+      required String label,
+      required VoidCallback onPressed,
+      bool filled = false,
+    }) {
+      final child = Text(label);
+      if (filled) {
+        return FilledButton.icon(
+          onPressed: enabled ? onPressed : null,
+          icon: Icon(icon),
+          label: child,
+        );
+      }
+      return OutlinedButton.icon(
+        onPressed: enabled ? onPressed : null,
+        icon: Icon(icon),
+        label: child,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            actionButton(
+              icon: Icons.task_alt_rounded,
+              label: 'Preparar conteo',
+              onPressed: onPrepare,
+            ),
+            actionButton(
+              icon: Icons.play_arrow_rounded,
+              label: startSent ? 'Iniciar de nuevo' : 'Iniciar conteo',
+              onPressed: onStart,
+              filled: true,
+            ),
+            actionButton(
+              icon: Icons.stop_rounded,
+              label: 'Detener conteo',
+              onPressed: onStop,
+            ),
+            actionButton(
+              icon: Icons.query_stats_rounded,
+              label: 'Estado de conteo',
+              onPressed: onStatus,
+            ),
+            actionButton(
+              icon: Icons.assignment_turned_in_rounded,
+              label: 'Resultado',
+              onPressed: onResult,
+            ),
+          ],
+        ),
+        if (busyLabel != null) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 8),
+              Text(busyLabel!),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _JetsonStatusPanel extends StatelessWidget {
   const _JetsonStatusPanel({required this.status});
 
@@ -579,15 +706,35 @@ class _CountStatusPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = status.failed ? Colors.red.shade700 : const Color(0xFF2E7D32);
+    final color = status.failed
+        ? Colors.red.shade700
+        : status.busy
+        ? Colors.orange.shade800
+        : const Color(0xFF2E7D32);
     final background = status.failed
         ? Colors.red.shade50
+        : status.busy
+        ? Colors.orange.shade50
         : const Color(0xFFE8F5E9);
-    final title = status.failed
-        ? 'No se pudo iniciar el conteo'
-        : status.status == 'RUNNING'
-        ? 'Conteo ya estaba en marcha'
-        : 'Conteo iniciado';
+    final title = switch (status.status) {
+      'READY' => 'Equipo listo para contar',
+      'STARTED' => 'Conteo iniciado',
+      'RUNNING' => 'Conteo en marcha',
+      'BUSY' => 'Conteo ya está en marcha',
+      'STOPPING' => 'Deteniendo conteo',
+      'STOPPED' => 'Conteo detenido',
+      'RESULT' => 'Resultado de conteo',
+      'ERROR' => 'Error en conteo',
+      _ => 'Estado de conteo',
+    };
+    final icon = switch (status.status) {
+      'READY' => Icons.task_alt_rounded,
+      'STARTED' || 'RUNNING' || 'BUSY' => Icons.play_circle_fill_rounded,
+      'STOPPING' => Icons.sync_rounded,
+      'STOPPED' || 'RESULT' => Icons.assignment_turned_in_rounded,
+      'ERROR' => Icons.error_outline_rounded,
+      _ => Icons.info_outline_rounded,
+    };
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -599,12 +746,7 @@ class _CountStatusPanel extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            status.failed
-                ? Icons.error_outline_rounded
-                : Icons.play_circle_fill_rounded,
-            color: color,
-          ),
+          Icon(icon, color: color),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -616,6 +758,39 @@ class _CountStatusPanel extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(status.detail),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _StatusPill(
+                      icon: Icons.tag_rounded,
+                      label: 'Sesión',
+                      value: status.sessionId,
+                    ),
+                    _StatusPill(
+                      icon: Icons.schedule_rounded,
+                      label: 'Tiempo',
+                      value: '${status.elapsedSec}s',
+                    ),
+                    _StatusPill(
+                      icon: Icons.pin_rounded,
+                      label: 'PID',
+                      value: status.pid,
+                    ),
+                    _StatusPill(
+                      icon: Icons.numbers_rounded,
+                      label: 'Conteo',
+                      value: status.countLabel,
+                    ),
+                    if (status.reason.isNotEmpty)
+                      _StatusPill(
+                        icon: Icons.flag_rounded,
+                        label: 'Motivo',
+                        value: status.reason,
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 Text(
                   'Actualizado ${formatDateTime(status.receivedAt)}',
@@ -742,13 +917,35 @@ class _FriendlyActivityList extends StatelessWidget {
     if (message.startsWith('JETSON_COUNT:')) {
       if (message.contains('status=ERROR')) {
         return const _FriendlyActivity(
-          text: 'El equipo de campo no pudo iniciar el conteo.',
+          text: 'El equipo de campo reporto un error de conteo.',
           icon: Icons.error_outline_rounded,
           color: Colors.red,
         );
       }
+      if (message.contains('status=READY')) {
+        return const _FriendlyActivity(
+          text: 'El equipo de campo esta listo para contar.',
+          icon: Icons.task_alt_rounded,
+          color: Color(0xFF2E7D32),
+        );
+      }
+      if (message.contains('status=STOPPED') ||
+          message.contains('status=RESULT')) {
+        return const _FriendlyActivity(
+          text: 'El equipo de campo devolvio el resultado de la sesion.',
+          icon: Icons.assignment_turned_in_rounded,
+          color: Color(0xFF2E7D32),
+        );
+      }
+      if (message.contains('status=BUSY')) {
+        return const _FriendlyActivity(
+          text: 'Ya hay una sesion de conteo activa.',
+          icon: Icons.info_outline_rounded,
+          color: Colors.orange,
+        );
+      }
       return const _FriendlyActivity(
-        text: 'El conteo fue iniciado en el equipo de campo.',
+        text: 'El equipo de campo actualizo la sesion de conteo.',
         icon: Icons.play_circle_fill_rounded,
         color: Color(0xFF2E7D32),
       );
