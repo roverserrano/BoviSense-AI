@@ -66,11 +66,17 @@ class GanaderoRepository {
     );
   }
 
-  Future<ConteoModel> iniciarConteo() async {
-    final response = await _apiClient.post('/api/ganadero/conteos', {});
+  Future<ConteoModel> registrarConteoReal({
+    required int cantidadDetectada,
+    String? sessionId,
+  }) async {
+    final response = await _apiClient.post('/api/ganadero/conteos', {
+      'cantidad_detectada': cantidadDetectada,
+      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+    });
 
     if (response is! Map<String, dynamic>) {
-      throw Exception('Respuesta inválida del backend al iniciar conteo.');
+      throw Exception('Respuesta inválida del backend al registrar conteo.');
     }
 
     return ConteoModel.fromJson(

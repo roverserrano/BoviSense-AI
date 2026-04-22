@@ -86,7 +86,7 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
                 padding: EdgeInsets.all(16),
                 child: Text(
                   'Esta configuración será usada como base para los conteos del ganado. '
-                  'Cuando se integre el prototipo con LoRa/ESP32, esta información seguirá siendo consumida desde el backend.',
+                  'La cantidad esperada permite comparar los resultados recibidos desde el equipo de campo.',
                 ),
               ),
             ),

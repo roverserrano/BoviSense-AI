@@ -13,6 +13,12 @@ class AuthRepository {
   final FirebaseAuth _firebaseAuth;
   final FirebaseFirestore _firestore;
 
+  Future<void> discardPersistedSession() async {
+    if (_firebaseAuth.currentUser != null) {
+      await _firebaseAuth.signOut();
+    }
+  }
+
   Future<UsuarioModel> signIn({
     required String email,
     required String password,
@@ -75,14 +81,7 @@ class AuthRepository {
     required String uid,
     required String email,
   }) async {
-    print('DEBUG AUTH UID: $uid');
-    print('DEBUG AUTH EMAIL: $email');
-
     final byUid = await _firestore.collection('Usuarios').doc(uid).get();
-
-    print('DEBUG FIRESTORE PATH: Usuarios/$uid');
-    print('DEBUG DOCUMENT EXISTS: ${byUid.exists}');
-    print('DEBUG DOCUMENT DATA: ${byUid.data()}');
 
     if (byUid.exists && byUid.data() != null) {
       return UsuarioModel.fromJson(byUid.data()!, documentId: byUid.id);
@@ -94,9 +93,7 @@ class AuthRepository {
         .limit(1)
         .get();
 
-    print('DEBUG EMAIL MATCH COUNT: ${byEmail.docs.length}');
     if (byEmail.docs.isNotEmpty) {
-      print('DEBUG EMAIL MATCH DOC ID: ${byEmail.docs.first.id}');
       throw Exception(
         'El perfil existe, pero el ID del documento no coincide con el UID de Authentication. Usa como ID: $uid',
       );

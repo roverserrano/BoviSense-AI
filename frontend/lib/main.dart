@@ -63,7 +63,7 @@ class BobisenseAiApp extends StatelessWidget {
           create: (_) => Esp32BleBridgeService(),
         ),
         ChangeNotifierProvider<AuthViewModel>(
-          create: (_) => AuthViewModel(authRepository)..restoreSession(),
+          create: (_) => AuthViewModel(authRepository)..initializeSession(),
         ),
         ChangeNotifierProvider<AdminUsuariosViewModel>(
           create: (_) => AdminUsuariosViewModel(adminUsuarioRepository),
@@ -72,12 +72,56 @@ class BobisenseAiApp extends StatelessWidget {
           create: (_) => GanaderoViewModel(ganaderoRepository),
         ),
       ],
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: 'Bobisense AI',
-        theme: AppTheme.lightTheme,
-        home: const AuthGate(),
+      child: _AppLifecycleSessionGuard(
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Bobisense AI',
+          theme: AppTheme.lightTheme,
+          home: const AuthGate(),
+        ),
       ),
     );
   }
+}
+
+class _AppLifecycleSessionGuard extends StatefulWidget {
+  const _AppLifecycleSessionGuard({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_AppLifecycleSessionGuard> createState() =>
+      _AppLifecycleSessionGuardState();
+}
+
+class _AppLifecycleSessionGuardState extends State<_AppLifecycleSessionGuard>
+    with WidgetsBindingObserver {
+  bool _isClosingSession = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.detached || _isClosingSession) {
+      return;
+    }
+
+    _isClosingSession = true;
+    context.read<AuthViewModel>().closeAppSession().whenComplete(() {
+      _isClosingSession = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

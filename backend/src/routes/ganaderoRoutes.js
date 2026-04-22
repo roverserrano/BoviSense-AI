@@ -11,7 +11,7 @@ router.get('/dashboard', ganaderoController.obtenerDashboard);
 router.get('/configuracion', ganaderoController.obtenerConfiguracion);
 router.put('/configuracion', ganaderoController.guardarConfiguracion);
 router.get('/dispositivo', ganaderoController.obtenerDispositivo);
-router.post('/conteos', ganaderoController.iniciarConteo);
+router.post('/conteos', ganaderoController.registrarConteoReal);
 router.get('/conteos', ganaderoController.listarConteos);
 router.get('/conteos/:id', ganaderoController.obtenerConteoDetalle);
 router.get('/alertas', ganaderoController.listarAlertas);

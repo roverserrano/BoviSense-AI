@@ -1,7 +1,5 @@
 class AppConfig {
-  // Android emulator => 10.0.2.2
-  // iOS simulator => 127.0.0.1
-  // Dispositivo físico => IP local de tu PC/servidor
+  // En telefono fisico, usa la IP local del servidor backend.
   static const String apiBaseUrl = 'http://192.168.1.3:3000';
 
   // ESP8266 conectado al hotspot del celular:

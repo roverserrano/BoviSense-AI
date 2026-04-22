@@ -45,9 +45,8 @@ class DispositivoConteoModel {
       nivelBateria: jsonToDouble(json['nivel_bateria'] ?? json['nivelBateria']),
       coordenadasGps: (json['coordenadas_gps'] ?? json['coordenadasGPS'] ?? '')
           .toString(),
-      modoOperacion:
-          (json['modo_operacion'] ?? json['modoOperacion'] ?? 'simulacion')
-              .toString(),
+      modoOperacion: (json['modo_operacion'] ?? json['modoOperacion'] ?? 'lora')
+          .toString(),
       ultimaSincronizacion: jsonToDate(
         json['ultima_sincronizacion'] ?? json['ultimaSincronizacion'],
       ),

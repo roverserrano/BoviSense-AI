@@ -70,74 +70,7 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
       return;
     }
 
-    final confirm =
-        await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Iniciar conteo'),
-            content: Text(
-              'Se iniciará un conteo para la finca "${vm.configuracion!.nombreFinca}" '
-              'con cantidad esperada ${vm.configuracion!.cantidadEsperada}.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancelar'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Iniciar'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-
-    if (!confirm || !mounted) return;
-
-    final conteo = await vm.iniciarConteo();
-
-    if (!mounted) return;
-
-    if (conteo == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(vm.errorMessage ?? 'No se pudo iniciar el conteo.'),
-        ),
-      );
-      return;
-    }
-
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Resultado del conteo'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _InfoRow(
-              label: 'Detectados',
-              value: conteo.cantidadDetectada.toString(),
-            ),
-            _InfoRow(
-              label: 'Esperados',
-              value: conteo.cantidadEsperada.toString(),
-            ),
-            _InfoRow(
-              label: 'Diferencia',
-              value: formatSignedInt(conteo.diferencia),
-            ),
-            _InfoRow(label: 'Origen', value: conteo.origen),
-          ],
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Aceptar'),
-          ),
-        ],
-      ),
-    );
+    await _openEstadoDispositivo();
   }
 
   @override
@@ -145,6 +78,7 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
     final authVm = context.watch<AuthViewModel>();
     final vm = context.watch<GanaderoViewModel>();
     final dashboard = vm.dashboard;
+    final dispositivo = dashboard?.dispositivo;
     final usuario = authVm.currentUser;
 
     return Scaffold(
@@ -159,18 +93,9 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: vm.isStartingCount ? null : _startCount,
-        icon: vm.isStartingCount
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-            : const Icon(Icons.play_arrow_rounded),
-        label: Text(vm.isStartingCount ? 'Contando...' : 'Iniciar conteo'),
+        onPressed: _startCount,
+        icon: const Icon(Icons.play_arrow_rounded),
+        label: const Text('Iniciar conteo'),
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -263,7 +188,7 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                       ),
                       _QuickActionButton(
                         icon: Icons.memory_rounded,
-                        label: 'Estado del prototipo',
+                        label: 'Estado del equipo',
                         onTap: _openEstadoDispositivo,
                       ),
                     ],
@@ -330,70 +255,61 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: dashboard?.dispositivo == null
-                      ? const Text('No hay información del dispositivo.')
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+              if (dispositivo != null) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Equipo de conteo',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
-                            const Text(
-                              'Prototipo de conteo',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
+                            Chip(
+                              label: Text(dispositivo.estadoConexion.toUpperCase()),
+                              backgroundColor: dispositivo.estadoConexion == 'conectado'
+                                  ? Colors.green.shade50
+                                  : Colors.orange.shade50,
+                            ),
+                            Chip(
+                              label: Text(dispositivo.modoOperacion.toUpperCase()),
+                            ),
+                            if (dispositivo.nivelBateria > 0)
+                              Chip(
+                                label: Text(
+                                  'Batería ${(dispositivo.nivelBateria * 100).toStringAsFixed(0)}%',
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                Chip(
-                                  label: Text(
-                                    dashboard!.dispositivo!.estadoConexion
-                                        .toUpperCase(),
-                                  ),
-                                  backgroundColor:
-                                      dashboard!.dispositivo!.estadoConexion ==
-                                          'conectado'
-                                      ? Colors.green.shade50
-                                      : Colors.orange.shade50,
-                                ),
-                                Chip(
-                                  label: Text(
-                                    dashboard!.dispositivo!.modoOperacion
-                                        .toUpperCase(),
-                                  ),
-                                ),
-                                Chip(
-                                  label: Text(
-                                    'Batería ${(dashboard!.dispositivo!.nivelBateria * 100).toStringAsFixed(0)}%',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            _InfoRow(
-                              label: 'Tipo',
-                              value: dashboard!.dispositivo!.tipoDispositivo,
-                            ),
-                            _InfoRow(
-                              label: 'Versión modelo',
-                              value: dashboard!.dispositivo!.versionModelo,
-                            ),
-                            _InfoRow(
-                              label: 'Última sincronización',
-                              value: formatDateTime(
-                                dashboard!.dispositivo!.ultimaSincronizacion,
-                              ),
-                            ),
                           ],
                         ),
+                        const SizedBox(height: 8),
+                        _InfoRow(
+                          label: 'Tipo',
+                          value: dispositivo.tipoDispositivo,
+                        ),
+                        _InfoRow(
+                          label: 'Versión modelo',
+                          value: dispositivo.versionModelo,
+                        ),
+                        _InfoRow(
+                          label: 'Última sincronización',
+                          value: formatDateTime(dispositivo.ultimaSincronizacion),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
+                const SizedBox(height: 16),
+              ],
               _SectionTitle(
                 title: 'Conteos recientes',
                 actionLabel: 'Ver historial',

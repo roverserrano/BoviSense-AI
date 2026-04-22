@@ -193,7 +193,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     final dispositivo = vm.dispositivo;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Estado del prototipo')),
+      appBar: AppBar(title: const Text('Estado del equipo')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -209,7 +209,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Conecta el teléfono al prototipo y revisa si la computadora de campo respondió correctamente.',
+                    'Conecta el teléfono al equipo y revisa si la computadora de campo respondió correctamente.',
                   ),
                   const SizedBox(height: 12),
                   _BleBridgeStatus(bridge: bridge),
@@ -308,7 +308,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                   Text(
                     bridge.isConnected
                         ? 'La revisión consulta el equipo remoto por LoRa y muestra su estado aquí.'
-                        : 'Primero conecta el teléfono al prototipo por Bluetooth.',
+                        : 'Primero conecta el teléfono al equipo por Bluetooth.',
                     style: Theme.of(
                       context,
                     ).textTheme.bodySmall?.copyWith(color: Colors.black54),
@@ -437,7 +437,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                     ),
                     SizedBox(height: 12),
                     Text(
-                      'No hay información del prototipo.',
+                      'No hay información del equipo.',
                       textAlign: TextAlign.center,
                     ),
                   ],
@@ -487,18 +487,6 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                           : dispositivo.coordenadasGps,
                     ),
                   ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              color: const Color(0xFFE8F5E9),
-              child: const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  'Por ahora el prototipo está en modo simulación desde backend. '
-                  'Cuando integremos LoRa + ESP32, esta pantalla seguirá funcionando, '
-                  'pero el estado vendrá desde el dispositivo real.',
                 ),
               ),
             ),
@@ -966,7 +954,7 @@ class _FriendlyActivityList extends StatelessWidget {
     }
     if (message.contains('BLE conectado') || message.contains('Conectado')) {
       return const _FriendlyActivity(
-        text: 'Telefono conectado al prototipo.',
+        text: 'Telefono conectado al equipo.',
         icon: Icons.bluetooth_connected_rounded,
         color: Color(0xFF2E7D32),
       );

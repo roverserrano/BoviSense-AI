@@ -35,7 +35,7 @@ class ConteoModel {
       diferencia: jsonToInt(json['diferencia']),
       estadoConteo: (json['estado_conteo'] ?? json['estadoConteo'] ?? '')
           .toString(),
-      origen: (json['origen'] ?? 'simulacion').toString(),
+      origen: (json['origen'] ?? 'lora').toString(),
       resumen: (json['resumen'] ?? '').toString(),
       fechaHoraInicio: jsonToDate(
         json['fecha_hora_inicio'] ?? json['fechaHoraInicio'],

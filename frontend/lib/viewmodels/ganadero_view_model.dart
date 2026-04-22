@@ -20,7 +20,7 @@ class GanaderoViewModel extends ChangeNotifier {
   bool _isLoadingHistorial = false;
   bool _isLoadingAlertas = false;
   bool _isSavingConfig = false;
-  bool _isStartingCount = false;
+  bool _isRegisteringCount = false;
 
   String? _errorMessage;
 
@@ -34,7 +34,7 @@ class GanaderoViewModel extends ChangeNotifier {
   bool get isLoadingHistorial => _isLoadingHistorial;
   bool get isLoadingAlertas => _isLoadingAlertas;
   bool get isSavingConfig => _isSavingConfig;
-  bool get isStartingCount => _isStartingCount;
+  bool get isRegisteringCount => _isRegisteringCount;
   String? get errorMessage => _errorMessage;
 
   Future<void> loadDashboard() async {
@@ -111,13 +111,19 @@ class GanaderoViewModel extends ChangeNotifier {
     }
   }
 
-  Future<ConteoModel?> iniciarConteo() async {
+  Future<ConteoModel?> registrarConteoReal({
+    required int cantidadDetectada,
+    String? sessionId,
+  }) async {
     try {
-      _isStartingCount = true;
+      _isRegisteringCount = true;
       _errorMessage = null;
       notifyListeners();
 
-      final conteo = await _repository.iniciarConteo();
+      final conteo = await _repository.registrarConteoReal(
+        cantidadDetectada: cantidadDetectada,
+        sessionId: sessionId,
+      );
       await loadDashboard();
       await loadHistorial();
       await loadAlertas();
@@ -127,7 +133,7 @@ class GanaderoViewModel extends ChangeNotifier {
       notifyListeners();
       return null;
     } finally {
-      _isStartingCount = false;
+      _isRegisteringCount = false;
       notifyListeners();
     }
   }

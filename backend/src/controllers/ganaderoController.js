@@ -57,8 +57,20 @@ function mapDispositivo(doc) {
         estado_operativo: (data.estado_operativo || '').toString(),
         nivel_bateria: toDouble(data.nivel_bateria),
         coordenadas_gps: (data.coordenadas_gps || '').toString(),
-        modo_operacion: (data.modo_operacion || 'simulacion').toString(),
+        modo_operacion: (data.modo_operacion || 'lora').toString(),
     };
+}
+
+function isPlaceholderDispositivo(data) {
+    const estadoConexion = (data.estado_conexion || '').toString();
+    const estadoOperativo = (data.estado_operativo || '').toString();
+    const nombre = (data.nombre_dispositivo || '').toString();
+
+    return (
+        nombre === 'BoviSense Bridge' &&
+        estadoConexion === 'desconocido' &&
+        estadoOperativo === 'pendiente'
+    );
 }
 
 function mapConteo(doc) {
@@ -72,7 +84,7 @@ function mapConteo(doc) {
         cantidad_esperada: toInt(data.cantidad_esperada),
         diferencia: toInt(data.diferencia),
         estado_conteo: (data.estado_conteo || '').toString(),
-        origen: (data.origen || 'simulacion').toString(),
+        origen: (data.origen || 'lora').toString(),
         resumen: (data.resumen || '').toString(),
     };
 }
@@ -90,28 +102,16 @@ function mapAlerta(doc) {
     };
 }
 
-async function ensureDispositivo(uid) {
+async function getDispositivo(uid) {
     const { deviceRef } = getRefs(uid);
     const current = await deviceRef.get();
 
-    if (current.exists) {
-        return mapDispositivo(current);
-    }
+    if (!current.exists) return null;
 
-    await deviceRef.set({
-        nombre_dispositivo: 'Prototipo Bobisense',
-        tipo_dispositivo: 'ESP32 + LoRa',
-        estado_conexion: 'conectado',
-        ultima_sincronizacion: FieldValue.serverTimestamp(),
-        version_modelo: 'v1.0.0',
-        estado_operativo: 'disponible',
-        nivel_bateria: 0.95,
-        coordenadas_gps: '',
-        modo_operacion: 'simulacion',
-    });
+    const data = current.data() || {};
+    if (isPlaceholderDispositivo(data)) return null;
 
-    const created = await deviceRef.get();
-    return mapDispositivo(created);
+    return mapDispositivo(current);
 }
 
 function validarConfiguracion(body) {
@@ -134,12 +134,6 @@ function validarConfiguracion(body) {
 
 function calcularDiferencia(cantidadEsperada, cantidadDetectada) {
     return cantidadDetectada - cantidadEsperada;
-}
-
-function generarCantidadDetectada(cantidadEsperada) {
-    const margen = Math.max(1, Math.round(cantidadEsperada * 0.08));
-    const variacion = Math.floor(Math.random() * ((margen * 2) + 1)) - margen;
-    return Math.max(0, cantidadEsperada + variacion);
 }
 
 function buildResumen(cantidadDetectada, cantidadEsperada, diferencia) {
@@ -185,7 +179,7 @@ async function obtenerDashboard(req, res) {
             alertasRecientesSnap,
         ] = await Promise.all([
             refs.configRef.get(),
-            ensureDispositivo(uid),
+            getDispositivo(uid),
             refs.conteosRef.get(),
             refs.alertasRef.where('leida', '==', false).get(),
             refs.conteosRef.orderBy('fecha_hora_inicio', 'desc').limit(5).get(),
@@ -243,8 +237,6 @@ async function guardarConfiguracion(req, res) {
             { merge: true },
         );
 
-        await ensureDispositivo(req.user.uid);
-
         const saved = await refs.configRef.get();
 
         return res.status(200).json({
@@ -260,7 +252,7 @@ async function guardarConfiguracion(req, res) {
 
 async function obtenerDispositivo(req, res) {
     try {
-        const dispositivo = await ensureDispositivo(req.user.uid);
+        const dispositivo = await getDispositivo(req.user.uid);
 
         return res.status(200).json({
             dispositivo,
@@ -272,15 +264,15 @@ async function obtenerDispositivo(req, res) {
     }
 }
 
-async function iniciarConteo(req, res) {
+async function registrarConteoReal(req, res) {
     try {
         const uid = req.user.uid;
         const refs = getRefs(uid);
+        const cantidadDetectadaRaw = req.body.cantidad_detectada ?? req.body.cantidadDetectada;
+        const cantidadDetectada = Number.parseInt(cantidadDetectadaRaw, 10);
+        const sessionId = (req.body.session_id || req.body.sessionId || '').toString().trim();
 
-        const [configSnap, dispositivo] = await Promise.all([
-            refs.configRef.get(),
-            ensureDispositivo(uid),
-        ]);
+        const configSnap = await refs.configRef.get();
 
         if (!configSnap.exists) {
             return res.status(400).json({
@@ -288,17 +280,13 @@ async function iniciarConteo(req, res) {
             });
         }
 
-        if (
-            dispositivo.estado_conexion === 'desconectado' &&
-            dispositivo.modo_operacion !== 'simulacion'
-        ) {
+        if (cantidadDetectadaRaw === undefined || !Number.isInteger(cantidadDetectada) || cantidadDetectada < 0) {
             return res.status(400).json({
-                message: 'El prototipo no está conectado.',
+                message: 'La cantidad detectada real es obligatoria y no puede ser negativa.',
             });
         }
 
         const configuracion = mapConfiguracion(configSnap);
-        const cantidadDetectada = generarCantidadDetectada(configuracion.cantidad_esperada);
         const diferencia = calcularDiferencia(
             configuracion.cantidad_esperada,
             cantidadDetectada,
@@ -317,7 +305,8 @@ async function iniciarConteo(req, res) {
             cantidad_esperada: configuracion.cantidad_esperada,
             diferencia,
             estado_conteo: 'finalizado',
-            origen: dispositivo.modo_operacion,
+            origen: 'lora',
+            session_id: sessionId || null,
             resumen: buildResumen(
                 cantidadDetectada,
                 configuracion.cantidad_esperada,
@@ -328,13 +317,13 @@ async function iniciarConteo(req, res) {
         batch.set(
             refs.deviceRef,
             {
+                nombre_dispositivo: 'BoviSense Bridge',
+                tipo_dispositivo: 'ESP32 + LoRa + Jetson',
                 ultima_sincronizacion: FieldValue.serverTimestamp(),
                 estado_conexion: 'conectado',
                 estado_operativo: 'disponible',
-                nivel_bateria: Math.max(
-                    0.10,
-                    Number((dispositivo.nivel_bateria - 0.01).toFixed(2)),
-                ),
+                version_modelo: 'v1.0.0',
+                modo_operacion: 'lora',
             },
             { merge: true },
         );
@@ -349,7 +338,7 @@ async function iniciarConteo(req, res) {
         const createdAlert = alertRef ? await alertRef.get() : null;
 
         return res.status(201).json({
-            message: 'Conteo realizado correctamente.',
+            message: 'Conteo real registrado correctamente.',
             conteo: mapConteo(createdConteo),
             alerta: createdAlert ? mapAlerta(createdAlert) : null,
         });
@@ -449,7 +438,7 @@ module.exports = {
     obtenerConfiguracion,
     guardarConfiguracion,
     obtenerDispositivo,
-    iniciarConteo,
+    registrarConteoReal,
     listarConteos,
     obtenerConteoDetalle,
     listarAlertas,

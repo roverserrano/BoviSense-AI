@@ -20,6 +20,18 @@ class AuthViewModel extends ChangeNotifier {
   bool get isAuthenticated => _currentUser != null;
   bool get isAdmin => _currentUser?.rol.toLowerCase() == 'administrador';
 
+  Future<void> initializeSession() async {
+    try {
+      await _repository.discardPersistedSession();
+      _currentUser = null;
+    } catch (e) {
+      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+    } finally {
+      _isInitializing = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> restoreSession() async {
     try {
       _currentUser = await _repository.restoreSession();
@@ -47,6 +59,17 @@ class AuthViewModel extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    await _repository.signOut();
+    _currentUser = null;
+    notifyListeners();
+  }
+
+  Future<void> closeAppSession() async {
+    if (_currentUser == null) {
+      await _repository.discardPersistedSession();
+      return;
+    }
+
     await _repository.signOut();
     _currentUser = null;
     notifyListeners();
