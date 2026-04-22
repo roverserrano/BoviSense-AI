@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/formatters.dart';
-import '../../data/services/esp8266_bridge_service.dart';
-import '../../data/services/esp8266_discovery_service.dart';
+import '../../data/services/esp32_ble_bridge_service.dart';
 import '../../viewmodels/ganadero_view_model.dart';
 
 class EstadoDispositivoPage extends StatefulWidget {
@@ -14,9 +13,15 @@ class EstadoDispositivoPage extends StatefulWidget {
 }
 
 class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
-  Esp8266BridgeStatus? _esp8266Status;
-  bool _isTestingEsp8266 = false;
-  String? _esp8266Error;
+  final TextEditingController _commandController = TextEditingController(
+    text: 'PING',
+  );
+  bool _isSendingCommand = false;
+  bool _isCheckingPrototypeStatus = false;
+  bool _isStartingCount = false;
+  bool _countOrderSent = false;
+  bool _prototypeStatusSent = false;
+  String? _bridgeError;
 
   @override
   void initState() {
@@ -26,60 +31,147 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     });
   }
 
-  Future<void> _testEsp8266Connection(Esp8266DiscoveryService discovery) async {
-    var baseUrl = discovery.baseUrl;
-    if (baseUrl == null) {
-      await discovery.requestNow();
-      baseUrl = discovery.baseUrl;
-    }
+  @override
+  void dispose() {
+    _commandController.dispose();
+    super.dispose();
+  }
 
-    if (baseUrl == null) {
-      setState(() {
-        _esp8266Status = null;
-        _esp8266Error =
-            'Dispositivo no descubierto. Mantén activo el hotspot HONOR X8b y espera el anuncio UDP del ESP8266.';
-      });
-      return;
-    }
-
+  Future<void> _connectBridge(Esp32BleBridgeService bridge) async {
     setState(() {
-      _isTestingEsp8266 = true;
-      _esp8266Error = null;
+      _bridgeError = null;
     });
 
-    final esp8266Service = Esp8266BridgeService(baseUrl: baseUrl);
     try {
-      await esp8266Service.ping();
-      final status = await esp8266Service.status();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _esp8266Status = status;
-      });
+      await bridge.scanAndConnect();
     } catch (e) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _esp8266Status = null;
-        _esp8266Error =
-            'No se pudo contactar el ESP8266 en $baseUrl. Verifica que el hotspot HONOR X8b esté activo y que el ESP8266 siga anunciándose.';
+        _bridgeError = 'No se pudo conectar por BLE: $e';
       });
+    }
+  }
+
+  Future<bool> _sendCommand(Esp32BleBridgeService bridge) async {
+    final command = _commandController.text.trim();
+    if (command.isEmpty) {
+      setState(() {
+        _bridgeError = 'Escribe un comando antes de enviar.';
+      });
+      return false;
+    }
+
+    setState(() {
+      _isSendingCommand = true;
+      _bridgeError = null;
+    });
+
+    try {
+      await bridge.sendCommand(command);
+    } catch (e) {
+      if (!mounted) {
+        return false;
+      }
+      setState(() {
+        _bridgeError = e.toString();
+      });
+      return false;
     } finally {
-      esp8266Service.close();
       if (mounted) {
         setState(() {
-          _isTestingEsp8266 = false;
+          _isSendingCommand = false;
+        });
+      }
+    }
+
+    return true;
+  }
+
+  Future<void> _sendPrototypeStatus(Esp32BleBridgeService bridge) async {
+    final requestedAt = DateTime.now();
+
+    setState(() {
+      _isCheckingPrototypeStatus = true;
+      _prototypeStatusSent = false;
+      _bridgeError = null;
+    });
+
+    try {
+      _commandController.text = 'ESTADO';
+      final sent = await _sendCommand(bridge);
+      if (!mounted || !sent) {
+        return;
+      }
+
+      final confirmed = await _waitForJetsonStatus(bridge, requestedAt);
+      if (!mounted) {
+        return;
+      }
+
+      if (confirmed) {
+        setState(() {
+          _prototypeStatusSent = true;
+        });
+      } else {
+        setState(() {
+          _bridgeError =
+              'No llegó la respuesta del equipo. Acerca los módulos LoRa y vuelve a intentar.';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingPrototypeStatus = false;
         });
       }
     }
   }
 
+  Future<void> _startCounting(Esp32BleBridgeService bridge) async {
+    setState(() {
+      _isStartingCount = true;
+      _countOrderSent = false;
+      _bridgeError = null;
+    });
+
+    try {
+      _commandController.text = 'INICIARCONTEO';
+      final sent = await _sendCommand(bridge);
+      if (mounted && sent) {
+        setState(() {
+          _countOrderSent = true;
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStartingCount = false;
+        });
+      }
+    }
+  }
+
+  Future<bool> _waitForJetsonStatus(
+    Esp32BleBridgeService bridge,
+    DateTime requestedAt,
+  ) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (DateTime.now().isBefore(deadline)) {
+      final status = bridge.latestJetsonStatus;
+      if (status != null && status.receivedAt.isAfter(requestedAt)) {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<GanaderoViewModel>();
-    final discovery = context.watch<Esp8266DiscoveryService>();
+    final bridge = context.watch<Esp32BleBridgeService>();
     final dispositivo = vm.dispositivo;
 
     return Scaffold(
@@ -94,88 +186,198 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'Conexión directa ESP8266',
+                    'Revisión del equipo',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'El ESP8266 se descubre automáticamente por UDP dentro del hotspot HONOR X8b.',
+                    'Conecta el teléfono al prototipo y revisa si la computadora de campo respondió correctamente.',
                   ),
                   const SizedBox(height: 12),
-                  _DiscoveryStatus(discovery: discovery),
+                  _BleBridgeStatus(bridge: bridge),
                   const SizedBox(height: 12),
                   FilledButton.icon(
-                    onPressed: _isTestingEsp8266
+                    onPressed: bridge.isBusy
                         ? null
-                        : () => _testEsp8266Connection(discovery),
-                    icon: _isTestingEsp8266
+                        : bridge.isConnected
+                        ? null
+                        : () => _connectBridge(bridge),
+                    icon: bridge.isBusy
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.wifi_tethering_rounded),
+                        : Icon(
+                            bridge.isConnected
+                                ? Icons.check_circle_rounded
+                                : Icons.bluetooth_searching_rounded,
+                          ),
                     label: Text(
-                      _isTestingEsp8266
-                          ? 'Probando conexión'
-                          : discovery.isAvailable
-                          ? 'Probar conexión ESP8266'
-                          : 'Buscar y probar ESP8266',
+                      bridge.isBusy
+                          ? 'Buscando equipo cercano'
+                          : bridge.isConnected
+                          ? 'Teléfono conectado al equipo'
+                          : 'Conectar teléfono al equipo',
                     ),
                   ),
-                  if (_esp8266Error != null) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: bridge.isConnected ? bridge.disconnect : null,
+                    icon: const Icon(Icons.bluetooth_disabled_rounded),
+                    label: const Text('Desconectar'),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed:
+                        !bridge.isConnected ||
+                            _isSendingCommand ||
+                            _isCheckingPrototypeStatus ||
+                            _isStartingCount
+                        ? null
+                        : () => _sendPrototypeStatus(bridge),
+                    icon: _isCheckingPrototypeStatus
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            _prototypeStatusSent
+                                ? Icons.verified_rounded
+                                : Icons.fact_check_rounded,
+                          ),
+                    label: Text(
+                      _isCheckingPrototypeStatus
+                          ? 'Esperando respuesta del equipo'
+                          : _prototypeStatusSent
+                          ? 'Revisar de nuevo'
+                          : 'Revisar estado del equipo',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed:
+                        !bridge.isConnected ||
+                            _isSendingCommand ||
+                            _isCheckingPrototypeStatus ||
+                            _isStartingCount
+                        ? null
+                        : () => _startCounting(bridge),
+                    icon: _isStartingCount
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.play_arrow_rounded),
+                    label: Text(
+                      _isStartingCount
+                          ? 'Enviando orden'
+                          : _countOrderSent
+                          ? 'Orden enviada'
+                          : 'Iniciar conteo',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    bridge.isConnected
+                        ? 'La revisión consulta el equipo remoto por LoRa y muestra su estado aquí.'
+                        : 'Primero conecta el teléfono al prototipo por Bluetooth.',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                  ),
+                  if (bridge.latestJetsonStatus != null) ...[
                     const SizedBox(height: 12),
-                    Text(
-                      _esp8266Error!,
-                      style: const TextStyle(color: Colors.red),
+                    _JetsonStatusPanel(status: bridge.latestJetsonStatus!),
+                  ],
+                  if (bridge.latestCountStatus != null) ...[
+                    const SizedBox(height: 12),
+                    _CountStatusPanel(status: bridge.latestCountStatus!),
+                  ],
+                  if (_countOrderSent && bridge.latestCountStatus == null) ...[
+                    const SizedBox(height: 12),
+                    const _FriendlyMessage(
+                      message:
+                          'Orden enviada al equipo de campo. El conteo se inicia en la computadora.',
+                      isError: false,
                     ),
                   ],
-                  if (_esp8266Status != null) ...[
+                  if (_bridgeError != null || bridge.errorMessage != null) ...[
                     const SizedBox(height: 12),
-                    _DeviceRow(
-                      label: 'Dispositivo',
-                      value: _esp8266Status!.device,
-                    ),
-                    _DeviceRow(label: 'Modo', value: _esp8266Status!.mode),
-                    _DeviceRow(label: 'SSID', value: _esp8266Status!.ssid),
-                    _DeviceRow(label: 'IP', value: _esp8266Status!.ip),
-                    _DeviceRow(
-                      label: 'Wi-Fi',
-                      value: _esp8266Status!.wifiConnected
-                          ? 'Conectado'
-                          : 'Desconectado',
-                    ),
-                    _DeviceRow(
-                      label: 'Señal Wi-Fi',
-                      value: '${_esp8266Status!.wifiRssi} dBm',
-                    ),
-                    _DeviceRow(
-                      label: 'LoRa',
-                      value: _esp8266Status!.loraReady
-                          ? 'Activo'
-                          : 'No iniciado',
-                    ),
-                    _DeviceRow(
-                      label: 'Direcciones',
-                      value:
-                          '${_esp8266Status!.localAddress} -> ${_esp8266Status!.remoteAddress}',
-                    ),
-                    _DeviceRow(
-                      label: 'TX/RX',
-                      value: '${_esp8266Status!.tx}/${_esp8266Status!.rx}',
-                    ),
-                    _DeviceRow(
-                      label: 'Último LoRa RX',
-                      value: _esp8266Status!.lastRxMessage.isEmpty
-                          ? 'Sin mensajes'
-                          : _esp8266Status!.lastRxMessage,
-                    ),
-                    _DeviceRow(
-                      label: 'Señal RX',
-                      value:
-                          '${_esp8266Status!.lastRxSender} | RSSI ${_esp8266Status!.lastRxRssi} dBm | SNR ${_esp8266Status!.lastRxSnr.toStringAsFixed(2)}',
+                    _FriendlyMessage(
+                      message: _bridgeError ?? bridge.errorMessage!,
+                      isError: true,
                     ),
                   ],
+                  const SizedBox(height: 12),
+                  _FriendlyActivityList(events: bridge.events),
+                  const SizedBox(height: 8),
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text('Opciones avanzadas'),
+                    children: [
+                      TextField(
+                        controller: _commandController,
+                        enabled: bridge.isConnected && !_isSendingCommand,
+                        decoration: const InputDecoration(
+                          labelText: 'Comando técnico',
+                          hintText: 'Ej: ABRIR_COMPUERTA',
+                          border: OutlineInputBorder(),
+                        ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: bridge.isConnected
+                            ? (_) => _sendCommand(bridge)
+                            : null,
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed:
+                            !bridge.isConnected ||
+                                _isSendingCommand ||
+                                _isCheckingPrototypeStatus ||
+                                _isStartingCount
+                            ? null
+                            : () => _sendCommand(bridge),
+                        icon: _isSendingCommand
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.send_rounded),
+                        label: Text(
+                          _isSendingCommand
+                              ? 'Enviando comando'
+                              : 'Enviar comando técnico',
+                        ),
+                      ),
+                      if (bridge.isConnected) ...[
+                        const SizedBox(height: 12),
+                        _DeviceRow(
+                          label: 'Dispositivo',
+                          value: bridge.deviceLabel,
+                        ),
+                        _DeviceRow(
+                          label: 'Servicio BLE',
+                          value: Esp32BleBridgeService.serviceUuid.str,
+                        ),
+                        _DeviceRow(
+                          label: 'RX write',
+                          value: Esp32BleBridgeService.rxCharacteristicUuid.str,
+                        ),
+                        _DeviceRow(
+                          label: 'TX notify',
+                          value: Esp32BleBridgeService.txCharacteristicUuid.str,
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      _BridgeEventList(events: bridge.events),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -282,6 +484,377 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
   }
 }
 
+class _JetsonStatusPanel extends StatelessWidget {
+  const _JetsonStatusPanel({required this.status});
+
+  final JetsonStatusSnapshot status;
+
+  @override
+  Widget build(BuildContext context) {
+    const healthyColor = Color(0xFF2E7D32);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8F5E9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: healthyColor.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.developer_board_rounded, color: healthyColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      status.hostname,
+                      style: textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: healthyColor,
+                      ),
+                    ),
+                    Text(
+                      'Computadora de campo confirmada por LoRa',
+                      style: textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.verified_rounded, color: healthyColor),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _StatusPill(
+                icon: Icons.bolt_rounded,
+                label: 'Modo energia',
+                value: status.powerMode,
+              ),
+              _StatusPill(
+                icon: Icons.schedule_rounded,
+                label: 'Tiempo activo',
+                value: status.uptime,
+              ),
+              _StatusPill(
+                icon: Icons.thermostat_rounded,
+                label: 'Temperatura',
+                value: status.cpuTemp,
+              ),
+              _StatusPill(
+                icon: Icons.memory_rounded,
+                label: 'Memoria',
+                value: status.memory,
+              ),
+              _StatusPill(
+                icon: Icons.speed_rounded,
+                label: 'Trabajo',
+                value: status.loadAverage,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Actualizado ${formatDateTime(status.receivedAt)}',
+            style: textTheme.bodySmall?.copyWith(color: Colors.black54),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CountStatusPanel extends StatelessWidget {
+  const _CountStatusPanel({required this.status});
+
+  final JetsonCountSnapshot status;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = status.failed ? Colors.red.shade700 : const Color(0xFF2E7D32);
+    final background = status.failed
+        ? Colors.red.shade50
+        : const Color(0xFFE8F5E9);
+    final title = status.failed
+        ? 'No se pudo iniciar el conteo'
+        : status.status == 'RUNNING'
+        ? 'Conteo ya estaba en marcha'
+        : 'Conteo iniciado';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            status.failed
+                ? Icons.error_outline_rounded
+                : Icons.play_circle_fill_rounded,
+            color: color,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(color: color, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                Text(status.detail),
+                const SizedBox(height: 6),
+                Text(
+                  'Actualizado ${formatDateTime(status.receivedAt)}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FriendlyMessage extends StatelessWidget {
+  const _FriendlyMessage({required this.message, required this.isError});
+
+  final String message;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isError ? Colors.red.shade700 : const Color(0xFF2E7D32);
+    final background = isError ? Colors.red.shade50 : const Color(0xFFE8F5E9);
+    final icon = isError ? Icons.warning_amber_rounded : Icons.check_rounded;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _friendlyError(message),
+              style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _friendlyError(String rawMessage) {
+    final lower = rawMessage.toLowerCase();
+    if (lower.contains('busy')) {
+      return 'Ya hay una revision en curso. Espera unos segundos antes de volver a intentar.';
+    }
+    if (lower.contains('timeout') || lower.contains('no lleg')) {
+      return 'No llego respuesta del equipo de campo. Acerca los modulos y revisa que ambos tengan energia.';
+    }
+    if (lower.contains('bluetooth') || lower.contains('ble')) {
+      return 'No se pudo usar Bluetooth. Verifica que este activado y vuelve a conectar.';
+    }
+    return rawMessage;
+  }
+}
+
+class _FriendlyActivityList extends StatelessWidget {
+  const _FriendlyActivityList({required this.events});
+
+  final List<Esp32BleBridgeEvent> events;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = events
+        .map(_activityFromEvent)
+        .whereType<_FriendlyActivity>()
+        .take(4)
+        .toList();
+
+    if (items.isEmpty) {
+      return const _FriendlyMessage(
+        message: 'Listo para revisar el equipo.',
+        isError: false,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Ultimos pasos',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        ...items.map((item) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(item.icon, color: item.color, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(item.text, style: TextStyle(color: item.color)),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  _FriendlyActivity? _activityFromEvent(Esp32BleBridgeEvent event) {
+    final message = event.message;
+
+    if (message.startsWith('JETSON_STATUS:')) {
+      return const _FriendlyActivity(
+        text: 'El equipo de campo respondio correctamente.',
+        icon: Icons.verified_rounded,
+        color: Color(0xFF2E7D32),
+      );
+    }
+    if (message.startsWith('JETSON_COUNT:')) {
+      if (message.contains('status=ERROR')) {
+        return const _FriendlyActivity(
+          text: 'El equipo de campo no pudo iniciar el conteo.',
+          icon: Icons.error_outline_rounded,
+          color: Colors.red,
+        );
+      }
+      return const _FriendlyActivity(
+        text: 'El conteo fue iniciado en el equipo de campo.',
+        icon: Icons.play_circle_fill_rounded,
+        color: Color(0xFF2E7D32),
+      );
+    }
+    if (message.contains('esperando estado Jetson')) {
+      return const _FriendlyActivity(
+        text: 'Esperando respuesta del equipo de campo.',
+        icon: Icons.sync_rounded,
+        color: Colors.orange,
+      );
+    }
+    if (message.contains('enviado por LoRa')) {
+      return const _FriendlyActivity(
+        text: 'Consulta enviada por radio.',
+        icon: Icons.settings_input_antenna_rounded,
+        color: Colors.blue,
+      );
+    }
+    if (message.contains('BLE conectado') || message.contains('Conectado')) {
+      return const _FriendlyActivity(
+        text: 'Telefono conectado al prototipo.',
+        icon: Icons.bluetooth_connected_rounded,
+        color: Color(0xFF2E7D32),
+      );
+    }
+    if (message.startsWith('ERROR:timeout')) {
+      return const _FriendlyActivity(
+        text: 'No llego respuesta. Revisa energia y distancia.',
+        icon: Icons.warning_amber_rounded,
+        color: Colors.red,
+      );
+    }
+    if (message.startsWith('STATUS:respuesta LoRa con interferencia') ||
+        message.startsWith('STATUS:paquete LoRa con interferencia')) {
+      return const _FriendlyActivity(
+        text: 'Se detecto interferencia de radio. Intenta otra vez.',
+        icon: Icons.signal_cellular_connected_no_internet_4_bar_rounded,
+        color: Colors.orange,
+      );
+    }
+
+    return null;
+  }
+}
+
+class _FriendlyActivity {
+  const _FriendlyActivity({
+    required this.text,
+    required this.icon,
+    required this.color,
+  });
+
+  final String text;
+  final IconData icon;
+  final Color color;
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 132),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: const Color(0xFF2E7D32)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
+                Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DeviceRow extends StatelessWidget {
   const _DeviceRow({required this.label, required this.value});
 
@@ -308,53 +881,66 @@ class _DeviceRow extends StatelessWidget {
   }
 }
 
-class _DiscoveryStatus extends StatelessWidget {
-  const _DiscoveryStatus({required this.discovery});
+class _BleBridgeStatus extends StatelessWidget {
+  const _BleBridgeStatus({required this.bridge});
 
-  final Esp8266DiscoveryService discovery;
+  final Esp32BleBridgeService bridge;
 
   @override
   Widget build(BuildContext context) {
-    final device = discovery.device;
     final Color color;
     final IconData icon;
     final String title;
     final String detail;
 
-    switch (discovery.state) {
-      case Esp8266DiscoveryState.notStarted:
+    switch (bridge.state) {
+      case Esp32BleBridgeState.idle:
         color = Colors.grey;
-        icon = Icons.search_rounded;
-        title = 'Descubrimiento no iniciado';
-        detail = 'Esperando iniciar escucha UDP.';
+        icon = Icons.bluetooth_rounded;
+        title = 'BLE listo';
+        detail = 'Presiona conectar para buscar BoviSense-Bridge.';
         break;
-      case Esp8266DiscoveryState.listening:
+      case Esp32BleBridgeState.scanning:
         color = Colors.orange;
-        icon = Icons.radar_rounded;
-        title = 'Buscando ESP8266';
-        detail = 'Escuchando anuncios UDP en el puerto 4210.';
+        icon = Icons.bluetooth_searching_rounded;
+        title = 'Buscando puente BLE';
+        detail = 'Escaneando el servicio BoviSense del ESP32.';
         break;
-      case Esp8266DiscoveryState.found:
+      case Esp32BleBridgeState.connecting:
+        color = Colors.orange;
+        icon = Icons.sync_rounded;
+        title = 'Conectando';
+        detail = 'Descubriendo servicio y characteristics RX/TX.';
+        break;
+      case Esp32BleBridgeState.connected:
         color = const Color(0xFF2E7D32);
         icon = Icons.check_circle_rounded;
-        title = 'Dispositivo encontrado';
-        detail = device == null
-            ? 'ESP8266 disponible.'
-            : '${device.baseUrl} | ID ${device.id}';
+        title = 'Puente conectado';
+        detail = bridge.deviceLabel;
         break;
-      case Esp8266DiscoveryState.offline:
+      case Esp32BleBridgeState.disconnected:
         color = Colors.red;
-        icon = Icons.wifi_off_rounded;
-        title = 'Dispositivo no disponible';
-        detail = device == null
-            ? 'No se reciben anuncios recientes.'
-            : 'Último anuncio desde ${device.baseUrl}.';
+        icon = Icons.bluetooth_disabled_rounded;
+        title = 'Puente desconectado';
+        detail = 'No hay enlace BLE activo con el ESP32.';
         break;
-      case Esp8266DiscoveryState.error:
+      case Esp32BleBridgeState.permissionDenied:
+        color = Colors.red;
+        icon = Icons.lock_rounded;
+        title = 'Permisos BLE denegados';
+        detail = 'Autoriza Bluetooth para poder escanear y conectar.';
+        break;
+      case Esp32BleBridgeState.adapterOff:
+        color = Colors.red;
+        icon = Icons.bluetooth_disabled_rounded;
+        title = 'Bluetooth apagado';
+        detail = 'Activa Bluetooth en el teléfono.';
+        break;
+      case Esp32BleBridgeState.error:
         color = Colors.red;
         icon = Icons.error_rounded;
-        title = 'Error de descubrimiento';
-        detail = discovery.errorMessage ?? 'No se pudo escuchar UDP.';
+        title = 'Error BLE';
+        detail = bridge.errorMessage ?? 'No se pudo usar Bluetooth.';
         break;
     }
 
@@ -385,6 +971,56 @@ class _DiscoveryStatus extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _BridgeEventList extends StatelessWidget {
+  const _BridgeEventList({required this.events});
+
+  final List<Esp32BleBridgeEvent> events;
+
+  @override
+  Widget build(BuildContext context) {
+    if (events.isEmpty) {
+      return const Text('Sin eventos BLE/LoRa todavía.');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Eventos recientes',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        ...events.take(8).map((event) {
+          final color = switch (event.direction) {
+            'APP_TX' => Colors.blue,
+            'ESP_RX' => const Color(0xFF2E7D32),
+            _ => Colors.grey,
+          };
+          final icon = switch (event.direction) {
+            'APP_TX' => Icons.north_east_rounded,
+            'ESP_RX' => Icons.south_west_rounded,
+            _ => Icons.info_outline_rounded,
+          };
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, size: 18, color: color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(event.message, style: TextStyle(color: color)),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
     );
   }
 }
