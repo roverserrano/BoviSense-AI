@@ -41,6 +41,9 @@ static const int LORA_RST_PIN = 14;
 static const int LORA_DIO0_PIN = 4;
 static const long LORA_FREQUENCY_HZ = 433E6;
 static const byte LORA_SYNC_WORD = 0xF3;
+static const int LORA_SPREADING_FACTOR = 7;
+static const long LORA_SIGNAL_BANDWIDTH_HZ = 125E3;
+static const int LORA_CODING_RATE_DENOMINATOR = 5;
 
 static const size_t MAX_BLE_COMMAND_LENGTH = 180;
 static const size_t MAX_LORA_PAYLOAD_LENGTH = 220;
@@ -141,6 +144,16 @@ void notifyApp(const String &message) {
   txCharacteristic->notify();
 }
 
+bool isSafeTextPayload(const String &payload) {
+  for (size_t i = 0; i < payload.length(); i++) {
+    const char value = payload.charAt(i);
+    if (value < 32 || value > 126) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool sendLoRaMessage(const String &payload) {
   if (!loraReady) {
     Serial.println(F("[LoRa] ERROR: modulo no iniciado"));
@@ -189,6 +202,20 @@ String buildTestPayload(const String &content) {
   return payload;
 }
 
+String buildStatusPayload(uint32_t msgId) {
+  String payload = F("ESTADO|");
+  payload += String(msgId);
+  payload += F("|uptime=");
+  payload += String(millis());
+  payload += F("|tx=");
+  payload += String(txCounter);
+  payload += F("|rx=");
+  payload += String(rxCounter);
+  payload += F("|lora=");
+  payload += loraReady ? F("OK") : F("NO_INICIADO");
+  return payload;
+}
+
 void handleBleCommand(const String &rawCommand) {
   String command = rawCommand;
   command.trim();
@@ -225,10 +252,13 @@ void handleBleCommand(const String &rawCommand) {
     content.equalsIgnoreCase(F("PING")) ||
     content.equalsIgnoreCase(F("TEST")) ||
     content.startsWith(F("TEST:"));
+  const bool isStatusCommand = content.equalsIgnoreCase(F("ESTADO"));
 
   const uint32_t msgId = nextMsgId++;
   String loraPayload;
-  if (isTestCommand) {
+  if (isStatusCommand) {
+    loraPayload = buildStatusPayload(msgId);
+  } else if (isTestCommand) {
     const String testContent = content.startsWith(F("TEST:"))
       ? content.substring(5)
       : content;
@@ -251,7 +281,7 @@ void handleBleCommand(const String &rawCommand) {
   }
 
   if (isTestCommand) {
-    notifyApp(String(F("STATUS:test LoRa enviado payload=")) + loraPayload);
+    notifyApp(String(F("STATUS:LoRa enviado payload=")) + loraPayload);
     return;
   }
 
@@ -259,6 +289,9 @@ void handleBleCommand(const String &rawCommand) {
   pendingSentAt = millis();
   waitingForResponse = true;
   notifyApp(String(F("STATUS:enviado por LoRa msgId=")) + String(msgId));
+  if (isStatusCommand) {
+    notifyApp(String(F("STATUS:esperando estado Jetson msgId=")) + String(msgId));
+  }
 }
 
 void handleLoRaPayload(const String &payload) {
@@ -278,12 +311,32 @@ void handleLoRaPayload(const String &payload) {
     const String content = protocolRemainder(payload, 2);
     const uint32_t msgId = (uint32_t)msgIdText.toInt();
 
+    if (msgId == 0 || content.length() == 0 || !isSafeTextPayload(content)) {
+      Serial.println(F("[LoRa] RESP corrupta o incompleta; se ignora para la app"));
+      notifyApp(F("STATUS:respuesta LoRa con interferencia"));
+      return;
+    }
+
     if (waitingForResponse && msgId == pendingMsgId) {
       waitingForResponse = false;
       notifyApp(String(F("STATUS:respondido msgId=")) + String(msgId));
     }
 
+    if (content.startsWith(F("JETSON_STATUS|"))) {
+      notifyApp(String(F("JETSON_STATUS:")) + protocolRemainder(content, 1));
+    } else if (content.startsWith(F("JS|"))) {
+      notifyApp(String(F("JETSON_STATUS:")) + protocolRemainder(content, 1));
+    } else if (content.startsWith(F("COUNT|"))) {
+      notifyApp(String(F("JETSON_COUNT:")) + protocolRemainder(content, 1));
+    }
+
     notifyApp(String(F("LORA_RX:")) + content);
+    return;
+  }
+
+  if (!isSafeTextPayload(payload)) {
+    Serial.println(F("[LoRa] Payload no imprimible; se omite notificacion cruda"));
+    notifyApp(F("STATUS:paquete LoRa con interferencia"));
     return;
   }
 
@@ -448,6 +501,9 @@ void setupLoRa() {
     return;
   }
 
+  LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
+  LoRa.setSignalBandwidth(LORA_SIGNAL_BANDWIDTH_HZ);
+  LoRa.setCodingRate4(LORA_CODING_RATE_DENOMINATOR);
   LoRa.setSyncWord(LORA_SYNC_WORD);
   LoRa.enableCrc();
   LoRa.receive();
@@ -457,6 +513,7 @@ void setupLoRa() {
   Serial.println(F("[LoRa] Frecuencia: 433 MHz"));
   Serial.println(F("[LoRa] Pines: SS=5 RST=14 DIO0=4"));
   Serial.println(F("[LoRa] Sync word: 0xF3"));
+  Serial.println(F("[LoRa] SF=7 BW=125kHz CR=4/5 CRC=ON"));
   notifyApp(F("STATUS:LoRa iniciado"));
 }
 

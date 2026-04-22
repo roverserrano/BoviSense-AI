@@ -29,6 +29,54 @@ class Esp32BleBridgeEvent {
   final String direction;
 }
 
+class JetsonStatusSnapshot {
+  const JetsonStatusSnapshot({
+    required this.fields,
+    required this.receivedAt,
+    required this.rawMessage,
+  });
+
+  final Map<String, String> fields;
+  final DateTime receivedAt;
+  final String rawMessage;
+
+  String get hostname => fields['hostname'] ?? 'No disponible';
+  String get powerMode =>
+      fields['power_mode'] ?? fields['p'] ?? 'No disponible';
+  String get uptime => fields['uptime'] ?? fields['u'] ?? 'No disponible';
+  String get cpuTemp => fields['cpu_temp'] ?? fields['t'] ?? 'No disponible';
+  String get memory {
+    final value = fields['memory'] ?? fields['m'];
+    if (value == null || value.isEmpty) {
+      return 'No disponible';
+    }
+    if (value.contains('MB') || value == 'No disponible') {
+      return value;
+    }
+    return '$value MB';
+  }
+
+  String get loadAverage =>
+      fields['load_avg'] ?? fields['l'] ?? 'No disponible';
+}
+
+class JetsonCountSnapshot {
+  const JetsonCountSnapshot({
+    required this.fields,
+    required this.receivedAt,
+    required this.rawMessage,
+  });
+
+  final Map<String, String> fields;
+  final DateTime receivedAt;
+  final String rawMessage;
+
+  String get status => fields['status'] ?? 'UNKNOWN';
+  String get detail => fields['detail'] ?? 'Sin detalle';
+  bool get started => status == 'STARTED' || status == 'RUNNING';
+  bool get failed => status == 'ERROR';
+}
+
 class Esp32BleBridgeService extends ChangeNotifier {
   static const String deviceName = 'BoviSense-Bridge';
   static final Guid serviceUuid = Guid('7d2f0001-1f3b-4a9b-8f2a-b05e00000001');
@@ -51,11 +99,15 @@ class Esp32BleBridgeService extends ChangeNotifier {
   int _scanResultBursts = 0;
   bool _useFineLocationForScan = false;
   final List<Esp32BleBridgeEvent> _events = [];
+  JetsonStatusSnapshot? _latestJetsonStatus;
+  JetsonCountSnapshot? _latestCountStatus;
 
   Esp32BleBridgeState get state => _state;
   BluetoothDevice? get device => _device;
   String? get errorMessage => _errorMessage;
   List<Esp32BleBridgeEvent> get events => List.unmodifiable(_events);
+  JetsonStatusSnapshot? get latestJetsonStatus => _latestJetsonStatus;
+  JetsonCountSnapshot? get latestCountStatus => _latestCountStatus;
   bool get isConnected => _state == Esp32BleBridgeState.connected;
   bool get isBusy =>
       _state == Esp32BleBridgeState.scanning ||
@@ -286,6 +338,14 @@ class Esp32BleBridgeService extends ChangeNotifier {
       }
     }
 
+    if (Platform.isAndroid) {
+      try {
+        await device.requestMtu(247);
+      } catch (_) {
+        // Algunos telefonos negocian el MTU automaticamente o no permiten cambiarlo.
+      }
+    }
+
     _connectionSubscription = device.connectionState.listen((state) {
       if (state == BluetoothConnectionState.disconnected &&
           _state == Esp32BleBridgeState.connected) {
@@ -325,7 +385,7 @@ class Esp32BleBridgeService extends ChangeNotifier {
     ) {
       final message = utf8.decode(value, allowMalformed: true).trim();
       if (message.isNotEmpty) {
-        _addEvent(message, 'ESP_RX');
+        _handleBridgeNotification(message);
       }
     });
     await _txCharacteristic!.setNotifyValue(true);
@@ -333,6 +393,46 @@ class Esp32BleBridgeService extends ChangeNotifier {
     _errorMessage = null;
     _addEvent('Conectado a $deviceName', 'STATUS');
     _setState(Esp32BleBridgeState.connected);
+  }
+
+  void _handleBridgeNotification(String message) {
+    if (message.startsWith('JETSON_STATUS:')) {
+      final rawStatus = message.substring('JETSON_STATUS:'.length);
+      _latestJetsonStatus = JetsonStatusSnapshot(
+        fields: _parseStatusFields(rawStatus),
+        receivedAt: DateTime.now(),
+        rawMessage: rawStatus,
+      );
+    } else if (message.startsWith('JETSON_COUNT:')) {
+      final rawStatus = message.substring('JETSON_COUNT:'.length);
+      _latestCountStatus = JetsonCountSnapshot(
+        fields: _parseStatusFields(rawStatus),
+        receivedAt: DateTime.now(),
+        rawMessage: rawStatus,
+      );
+    }
+
+    _addEvent(message, 'ESP_RX');
+  }
+
+  Map<String, String> _parseStatusFields(String rawStatus) {
+    final fields = <String, String>{};
+    for (final segment in rawStatus.split('|')) {
+      final separatorIndex = segment.indexOf('=');
+      if (separatorIndex <= 0) {
+        continue;
+      }
+
+      final key = segment.substring(0, separatorIndex).trim();
+      final value = segment.substring(separatorIndex + 1).trim();
+      if (key.isNotEmpty && value.isNotEmpty) {
+        fields[key] = value;
+      }
+    }
+    if (fields.containsKey('h') && !fields.containsKey('hostname')) {
+      fields['hostname'] = fields['h']!;
+    }
+    return fields;
   }
 
   void _addEvent(String message, String direction) {
