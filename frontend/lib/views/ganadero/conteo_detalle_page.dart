@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/utils/formatters.dart';
 import '../../data/models/conteo_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
+import '../common/session_actions.dart';
+import 'widgets/ganadero_design_system.dart';
 
 class ConteoDetallePage extends StatefulWidget {
   const ConteoDetallePage({super.key, required this.conteoId});
@@ -28,21 +29,30 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Detalle del conteo')),
+      appBar: GanaderoAppBar(
+        titleText: 'Resultado de conteo',
+        actions: const [SessionActionsMenu()],
+      ),
       body: FutureBuilder<ConteoModel>(
         future: _future,
         builder: (_, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(
+              child: CircularProgressIndicator(strokeWidth: 2),
+            );
           }
 
           if (snapshot.hasError) {
             return Center(
               child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  snapshot.error.toString().replaceFirst('Exception: ', ''),
-                  textAlign: TextAlign.center,
+                padding: const EdgeInsets.all(20),
+                child: AlertCard(
+                  title: 'Error',
+                  description: snapshot.error.toString().replaceFirst(
+                    'Exception: ',
+                    '',
+                  ),
+                  status: SimpleStatusType.error,
                 ),
               ),
             );
@@ -53,78 +63,44 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      _DetailRow(
-                        label: 'Inicio',
-                        value: formatDateTime(conteo.fechaHoraInicio),
-                      ),
-                      _DetailRow(
-                        label: 'Fin',
-                        value: formatDateTime(conteo.fechaHoraFin),
-                      ),
-                      _DetailRow(
-                        label: 'Cantidad detectada',
-                        value: conteo.cantidadDetectada.toString(),
-                      ),
-                      _DetailRow(
-                        label: 'Cantidad esperada',
-                        value: conteo.cantidadEsperada.toString(),
-                      ),
-                      _DetailRow(
-                        label: 'Diferencia',
-                        value: formatSignedInt(conteo.diferencia),
-                      ),
-                      _DetailRow(label: 'Estado', value: conteo.estadoConteo),
-                      _DetailRow(label: 'Origen', value: conteo.origen),
-                    ],
-                  ),
-                ),
+              ResultHero(
+                value: conteo.cantidadDetectada,
+                unit: 'animales detectados',
+                expected: conteo.cantidadEsperada,
+                diff: conteo.diferencia,
+                status: conteo.diferencia == 0
+                    ? 'Terminado'
+                    : conteo.diferencia < 0
+                    ? 'Faltante'
+                    : 'Excedente',
               ),
-              const SizedBox(height: 16),
-              Card(
-                color: const Color(0xFFE8F5E9),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    conteo.resumen.isEmpty
-                        ? 'Sin resumen disponible.'
-                        : conteo.resumen,
-                  ),
+              const SizedBox(height: 14),
+              if (conteo.diferencia != 0)
+                AlertCard(
+                  title: conteo.diferencia < 0
+                      ? 'Faltante detectado'
+                      : 'Excedente detectado',
+                  description: conteo.diferencia < 0
+                      ? 'Revisa el lote: faltan ${conteo.diferencia.abs()} animales respecto al esperado.'
+                      : 'Revisa el lote: hay ${conteo.diferencia.abs()} animales por encima del esperado.',
+                  status: conteo.diferencia < 0
+                      ? SimpleStatusType.inProgress
+                      : SimpleStatusType.error,
+                )
+              else
+                const AlertCard(
+                  title: 'Conteo correcto',
+                  description: 'El total coincide con la cantidad esperada.',
+                  status: SimpleStatusType.ready,
                 ),
+              const SizedBox(height: 14),
+              OutlineActionButton(
+                label: 'Volver',
+                onPressed: () => Navigator.of(context).pop(),
               ),
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 150,
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-          Expanded(child: Text(value)),
-        ],
       ),
     );
   }

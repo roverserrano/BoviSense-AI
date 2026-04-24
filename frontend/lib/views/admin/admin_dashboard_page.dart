@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/models/usuario_model.dart';
+import '../common/session_actions.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
 import '../../viewmodels/auth_view_model.dart';
 import 'usuario_form_page.dart';
@@ -89,12 +90,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Administrador'),
-        actions: [
-          IconButton(
-            onPressed: () => context.read<AuthViewModel>().logout(),
-            icon: const Icon(Icons.logout_rounded),
-          ),
-        ],
+        actions: const [SessionActionsMenu()],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: vm.isSaving ? null : () => _openForm(),

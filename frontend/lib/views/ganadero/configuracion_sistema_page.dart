@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../viewmodels/ganadero_view_model.dart';
+import '../common/session_actions.dart';
+import 'ganadero_nav.dart';
+import 'widgets/ganadero_design_system.dart';
 
 class ConfiguracionSistemaPage extends StatefulWidget {
   const ConfiguracionSistemaPage({super.key});
@@ -56,7 +59,7 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Configuración guardada correctamente.')),
       );
-      Navigator.of(context).pop();
+      goToGanaderoTab(context, 0);
       return;
     }
 
@@ -72,77 +75,105 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<GanaderoViewModel>();
+    final isConfigured = vm.configuracion != null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Configuración del sistema')),
+      appBar: GanaderoAppBar(
+        titleText: 'Finca',
+        actions: const [SessionActionsMenu()],
+      ),
+      bottomNavigationBar: GanaderoBottomNavBar(
+        currentIndex: 1,
+        onTap: (index) {
+          if (index == 1) return;
+          goToGanaderoTab(context, index);
+        },
+      ),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Card(
-              color: const Color(0xFFE8F5E9),
-              child: const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  'Esta configuración será usada como base para los conteos del ganado. '
-                  'La cantidad esperada permite comparar los resultados recibidos desde el equipo de campo.',
-                ),
+            if (isConfigured) ...[
+              const AlertCard(
+                title: 'Configuración lista',
+                description: 'La finca está preparada para iniciar conteos.',
+                status: SimpleStatusType.ready,
+              ),
+              const SizedBox(height: 14),
+            ],
+            const SectionTitle(text: 'Datos de la finca'),
+            _GroupCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextFormField(
+                    controller: _nombreFincaController,
+                    decoration: const InputDecoration(
+                      hintText: 'Nombre de la finca',
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa el nombre de la finca';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _cantidadEsperadaController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      hintText: 'Cantidad esperada de ganado',
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa la cantidad esperada';
+                      }
+                      final parsed = int.tryParse(value.trim());
+                      if (parsed == null || parsed <= 0) {
+                        return 'La cantidad debe ser mayor a cero';
+                      }
+                      return null;
+                    },
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
-            TextFormField(
-              controller: _nombreFincaController,
-              decoration: const InputDecoration(
-                labelText: 'Nombre de la finca',
-                prefixIcon: Icon(Icons.home_work_outlined),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return 'Ingresa el nombre de la finca';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _cantidadEsperadaController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Cantidad esperada de ganado',
-                prefixIcon: Icon(Icons.format_list_numbered_rounded),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return 'Ingresa la cantidad esperada';
-                }
-                final parsed = int.tryParse(value.trim());
-                if (parsed == null || parsed <= 0) {
-                  return 'La cantidad debe ser mayor a cero';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
+            const SectionTitle(text: 'Acciones'),
+            PrimaryButton(
+              label: vm.isSavingConfig ? 'Guardando...' : 'Guardar',
               onPressed: vm.isSavingConfig ? null : _save,
-              icon: vm.isSavingConfig
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.save_rounded),
-              label: Text(
-                vm.isSavingConfig ? 'Guardando...' : 'Guardar configuración',
-              ),
+              isLoading: vm.isSavingConfig,
+            ),
+            const SizedBox(height: 10),
+            OutlineActionButton(
+              label: 'Cancelar',
+              onPressed: () => goToGanaderoTab(context, 0),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _GroupCard extends StatelessWidget {
+  const _GroupCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: GanaderoColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: GanaderoColors.borderSoft, width: 0.5),
+      ),
+      child: child,
     );
   }
 }

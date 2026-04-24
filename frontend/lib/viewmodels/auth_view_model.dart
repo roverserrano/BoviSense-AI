@@ -11,11 +11,13 @@ class AuthViewModel extends ChangeNotifier {
   UsuarioModel? _currentUser;
   bool _isLoading = false;
   bool _isInitializing = true;
+  bool _isChangingPassword = false;
   String? _errorMessage;
 
   UsuarioModel? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
   bool get isInitializing => _isInitializing;
+  bool get isChangingPassword => _isChangingPassword;
   String? get errorMessage => _errorMessage;
   bool get isAuthenticated => _currentUser != null;
   bool get isAdmin => _currentUser?.rol.toLowerCase() == 'administrador';
@@ -62,6 +64,29 @@ class AuthViewModel extends ChangeNotifier {
     await _repository.signOut();
     _currentUser = null;
     notifyListeners();
+  }
+
+  Future<bool> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      _isChangingPassword = true;
+      _errorMessage = null;
+      notifyListeners();
+
+      await _repository.changePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      return true;
+    } catch (e) {
+      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      return false;
+    } finally {
+      _isChangingPassword = false;
+      notifyListeners();
+    }
   }
 
   Future<void> closeAppSession() async {

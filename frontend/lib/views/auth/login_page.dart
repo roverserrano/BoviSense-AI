@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../viewmodels/auth_view_model.dart';
+import '../ganadero/widgets/ganadero_design_system.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -47,57 +48,54 @@ class _LoginPageState extends State<LoginPage> {
     final vm = context.watch<AuthViewModel>();
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFFE8F5E9), Color(0xFFF6F1E7), Color(0xFFD7CCC8)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 450),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 20),
+                  Center(
+                    child: Column(
+                      children: const [
+                        _LoginMark(),
+                        SizedBox(height: 12),
+                        Text(
+                          'BoviSense-AI',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: GanaderoColors.textDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: GanaderoColors.card,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: GanaderoColors.borderSoft,
+                        width: 0.5,
+                      ),
+                    ),
+                    padding: const EdgeInsets.all(16),
                     child: Form(
                       key: _formKey,
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const CircleAvatar(
-                            radius: 36,
-                            backgroundColor: Color(0xFF2E7D32),
-                            child: Icon(
-                              Icons.eco_rounded,
-                              color: Colors.white,
-                              size: 36,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Bobisense AI',
-                            style: Theme.of(context).textTheme.headlineSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: const Color(0xFF2E7D32),
-                                ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Gestión ganadera inteligente',
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                          const SizedBox(height: 24),
+                          const SectionTitle(text: 'Acceso'),
                           TextFormField(
                             controller: _correoController,
                             keyboardType: TextInputType.emailAddress,
                             decoration: const InputDecoration(
-                              labelText: 'Correo',
-                              prefixIcon: Icon(Icons.email_outlined),
+                              hintText: 'Correo',
                             ),
                             validator: (value) {
                               if (value == null || value.trim().isEmpty) {
@@ -112,13 +110,12 @@ class _LoginPageState extends State<LoginPage> {
                               return null;
                             },
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 12),
                           TextFormField(
                             controller: _passwordController,
                             obscureText: _obscureText,
                             decoration: InputDecoration(
-                              labelText: 'Contraseña',
-                              prefixIcon: const Icon(Icons.lock_outline),
+                              hintText: 'Contraseña',
                               suffixIcon: IconButton(
                                 onPressed: () {
                                   setState(() => _obscureText = !_obscureText);
@@ -137,32 +134,54 @@ class _LoginPageState extends State<LoginPage> {
                               return null;
                             },
                           ),
-                          const SizedBox(height: 24),
-                          ElevatedButton.icon(
+                          const SizedBox(height: 18),
+                          PrimaryButton(
+                            label: vm.isLoading ? 'Entrando...' : 'Entrar',
                             onPressed: vm.isLoading ? null : _login,
-                            icon: vm.isLoading
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.login_rounded),
-                            label: Text(
-                              vm.isLoading ? 'Ingresando...' : 'Iniciar sesión',
-                            ),
+                            isLoading: vm.isLoading,
                           ),
                         ],
                       ),
                     ),
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Soporte: contacta al administrador.'),
+                        ),
+                      );
+                    },
+                    child: const Text('Necesito ayuda de soporte'),
+                  ),
+                ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _LoginMark extends StatelessWidget {
+  const _LoginMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 64,
+      height: 64,
+      decoration: BoxDecoration(
+        color: GanaderoColors.primary,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.agriculture_rounded,
+        color: GanaderoColors.buttonText,
+        size: 30,
       ),
     );
   }

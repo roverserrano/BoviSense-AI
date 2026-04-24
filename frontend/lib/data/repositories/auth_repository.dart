@@ -77,6 +77,35 @@ class AuthRepository {
     await _firebaseAuth.signOut();
   }
 
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
+      throw Exception('No hay una sesión activa.');
+    }
+
+    final email = user.email?.trim();
+    if (email == null || email.isEmpty) {
+      throw Exception('No se encontró el correo de la cuenta.');
+    }
+
+    try {
+      final credential = EmailAuthProvider.credential(
+        email: email,
+        password: currentPassword,
+      );
+
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_mapPasswordChangeError(e));
+    } catch (e) {
+      throw Exception(e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   Future<UsuarioModel> _loadUserProfile({
     required String uid,
     required String email,
@@ -118,6 +147,22 @@ class AuthRepository {
         return 'Demasiados intentos. Intenta más tarde.';
       default:
         return e.message ?? 'No se pudo iniciar sesión.';
+    }
+  }
+
+  String _mapPasswordChangeError(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'wrong-password':
+      case 'invalid-credential':
+        return 'La contraseña actual es incorrecta.';
+      case 'weak-password':
+        return 'La nueva contraseña es demasiado débil.';
+      case 'requires-recent-login':
+        return 'Vuelve a iniciar sesión para cambiar la contraseña.';
+      case 'too-many-requests':
+        return 'Demasiados intentos. Intenta más tarde.';
+      default:
+        return e.message ?? 'No se pudo cambiar la contraseña.';
     }
   }
 }
