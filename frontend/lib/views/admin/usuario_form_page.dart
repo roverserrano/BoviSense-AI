@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../../data/models/usuario_model.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
+import 'widgets/admin_tokens.dart';
+import 'widgets/section_label.dart';
 
 class UsuarioFormPage extends StatefulWidget {
   const UsuarioFormPage({super.key, this.usuario});
@@ -99,116 +101,141 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
     final vm = context.watch<AdminUsuariosViewModel>();
 
     return Scaffold(
+      backgroundColor: AdminPalette.pageBg,
       appBar: AppBar(
+        backgroundColor: AdminPalette.appBar,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         title: Text(_isEditing ? 'Editar usuario' : 'Registrar usuario'),
       ),
-      body: Stack(
-        children: [
-          Form(
-            key: _formKey,
-            child: ListView(
-              padding: const EdgeInsets.all(16),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (_isEditing && widget.usuario != null) ...[
+              _identityCard(widget.usuario!),
+              const SizedBox(height: 14),
+            ],
+            if (!_isEditing) ...[
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0F7E8),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AdminPalette.border, width: 0.5),
+                ),
+                child: const Text(
+                  'La contraseña inicial se genera automáticamente a partir del nombre y apellido. '
+                  'Ejemplo: Juan Pérez -> jperez. Luego se envía por correo electrónico.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF3B6D11),
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+            const SectionLabel(text: 'Datos personales'),
+            _sectionCard(
               children: [
-                if (!_isEditing)
-                  Card(
-                    color: const Color(0xFFE8F5E9),
-                    child: const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'La contraseña inicial se genera automáticamente a partir del nombre y apellido.\nEjemplo: Juan Pérez → jperez.\nLuego se envía por correo electrónico.',
-                      ),
-                    ),
+                _fieldRow(
+                  label: 'Nombre',
+                  child: TextFormField(
+                    controller: _nombreController,
+                    decoration: _fieldDecoration(),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa el nombre';
+                      }
+                      return null;
+                    },
                   ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _nombreController,
-                  decoration: const InputDecoration(
-                    labelText: 'Nombre',
-                    prefixIcon: Icon(Icons.person_outline_rounded),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa el nombre';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _apellidosController,
-                  decoration: const InputDecoration(
-                    labelText: 'Apellidos',
-                    prefixIcon: Icon(Icons.badge_outlined),
+                _thinDivider(),
+                _fieldRow(
+                  label: 'Apellidos',
+                  child: TextFormField(
+                    controller: _apellidosController,
+                    decoration: _fieldDecoration(),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa los apellidos';
+                      }
+                      return null;
+                    },
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa los apellidos';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _cedulaController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Cédula de identidad',
-                    prefixIcon: Icon(Icons.credit_card_rounded),
+                _thinDivider(),
+                _fieldRow(
+                  label: 'Cédula de identidad',
+                  child: TextFormField(
+                    controller: _cedulaController,
+                    keyboardType: TextInputType.number,
+                    decoration: _fieldDecoration(),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa la cédula';
+                      }
+                      if (int.tryParse(value.trim()) == null) {
+                        return 'La cédula debe ser numérica';
+                      }
+                      return null;
+                    },
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa la cédula';
-                    }
-                    if (int.tryParse(value.trim()) == null) {
-                      return 'La cédula debe ser numérica';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _correoController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Correo',
-                    prefixIcon: Icon(Icons.email_outlined),
+              ],
+            ),
+            const SizedBox(height: 14),
+            const SectionLabel(text: 'Contacto'),
+            _sectionCard(
+              children: [
+                _fieldRow(
+                  label: 'Correo electrónico',
+                  child: TextFormField(
+                    controller: _correoController,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: _fieldDecoration(),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa el correo';
+                      }
+                      final regex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
+                      if (!regex.hasMatch(value.trim())) {
+                        return 'Correo inválido';
+                      }
+                      return null;
+                    },
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa el correo';
-                    }
-                    final regex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
-                    if (!regex.hasMatch(value.trim())) {
-                      return 'Correo inválido';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _telefonoController,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'Teléfono',
-                    prefixIcon: Icon(Icons.phone_outlined),
+                _thinDivider(),
+                _fieldRow(
+                  label: 'Teléfono',
+                  child: TextFormField(
+                    controller: _telefonoController,
+                    keyboardType: TextInputType.phone,
+                    decoration: _fieldDecoration(),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Ingresa el teléfono';
+                      }
+                      if (int.tryParse(value.trim()) == null) {
+                        return 'El teléfono debe ser numérico';
+                      }
+                      return null;
+                    },
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa el teléfono';
-                    }
-                    if (int.tryParse(value.trim()) == null) {
-                      return 'El teléfono debe ser numérico';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
+              ],
+            ),
+            const SizedBox(height: 14),
+            const SectionLabel(text: 'Acceso al sistema'),
+            _sectionCard(
+              children: [
+                _dropdownRow(
+                  label: 'Rol',
                   value: _rol,
-                  decoration: const InputDecoration(
-                    labelText: 'Rol',
-                    prefixIcon: Icon(Icons.manage_accounts_rounded),
-                  ),
                   items: const [
                     DropdownMenuItem(value: 'usuario', child: Text('Usuario')),
                     DropdownMenuItem(
@@ -220,13 +247,10 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                     if (value != null) setState(() => _rol = value);
                   },
                 ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
+                _thinDivider(),
+                _dropdownRow(
+                  label: 'Estado',
                   value: _estado,
-                  decoration: const InputDecoration(
-                    labelText: 'Estado',
-                    prefixIcon: Icon(Icons.toggle_on_outlined),
-                  ),
                   items: const [
                     DropdownMenuItem(value: 'activo', child: Text('Activo')),
                     DropdownMenuItem(
@@ -238,36 +262,212 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                     if (value != null) setState(() => _estado = value);
                   },
                 ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: vm.isSaving ? null : _save,
-                  icon: vm.isSaving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Icon(
-                          _isEditing
-                              ? Icons.save_rounded
-                              : Icons.person_add_alt_1_rounded,
-                        ),
-                  label: Text(
-                    vm.isSaving
-                        ? 'Guardando...'
-                        : (_isEditing
-                              ? 'Actualizar usuario'
-                              : 'Registrar usuario'),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: vm.isSaving ? null : _save,
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 52),
+                elevation: 0,
+                backgroundColor: AdminPalette.primary,
+                foregroundColor: AdminPalette.onPrimary,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: vm.isSaving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      _isEditing ? 'Actualizar usuario' : 'Registrar usuario',
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _identityCard(UsuarioModel usuario) {
+    final isActive = usuario.estado.toLowerCase() == 'activo';
+    final initials = _initials(usuario.nombre, usuario.apellidos);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AdminPalette.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AdminPalette.border, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: AdminPalette.primary,
+            child: Text(
+              initials,
+              style: const TextStyle(
+                color: AdminPalette.onPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  usuario.nombreCompleto,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AdminPalette.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  usuario.correo,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AdminPalette.muted,
                   ),
                 ),
               ],
             ),
           ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: isActive ? AdminPalette.activeBg : AdminPalette.inactiveBg,
+              borderRadius: BorderRadius.circular(100),
+            ),
+            child: Text(
+              usuario.estado,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: isActive
+                    ? AdminPalette.activeText
+                    : AdminPalette.inactiveText,
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Widget _sectionCard({required List<Widget> children}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AdminPalette.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AdminPalette.border, width: 0.5),
+      ),
+      child: Column(children: children),
+    );
+  }
+
+  Widget _fieldRow({required String label, required Widget child}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: AdminPalette.muted),
+          ),
+          const SizedBox(height: 6),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _dropdownRow({
+    required String label,
+    required String value,
+    required List<DropdownMenuItem<String>> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: AdminPalette.textPrimary,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 170,
+            child: DropdownButtonHideUnderline(
+              child: DropdownButtonFormField<String>(
+                initialValue: value,
+                items: items,
+                onChanged: onChanged,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  filled: false,
+                  border: UnderlineInputBorder(borderSide: BorderSide.none),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: UnderlineInputBorder(
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: EdgeInsets.zero,
+                ),
+                icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AdminPalette.textPrimary,
+                ),
+                dropdownColor: AdminPalette.card,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _fieldDecoration() {
+    return const InputDecoration(
+      isDense: true,
+      filled: false,
+      border: UnderlineInputBorder(borderSide: BorderSide.none),
+      enabledBorder: UnderlineInputBorder(borderSide: BorderSide.none),
+      focusedBorder: UnderlineInputBorder(borderSide: BorderSide.none),
+      errorBorder: UnderlineInputBorder(borderSide: BorderSide.none),
+      focusedErrorBorder: UnderlineInputBorder(borderSide: BorderSide.none),
+      contentPadding: EdgeInsets.zero,
+    );
+  }
+
+  Widget _thinDivider() {
+    return Container(height: 0.5, color: const Color(0xFFE8E2D4));
+  }
+
+  String _initials(String name, String lastName) {
+    final first = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '';
+    final second = lastName.trim().isNotEmpty
+        ? lastName.trim()[0].toUpperCase()
+        : (name.trim().length > 1 ? name.trim()[1].toUpperCase() : 'U');
+    return '$first$second';
   }
 }

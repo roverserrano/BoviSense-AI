@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../viewmodels/auth_view_model.dart';
 import '../common/bovisense_logo.dart';
+import 'recuperar_contrasena_page.dart';
 import '../ganadero/widgets/ganadero_design_system.dart';
 
 class LoginPage extends StatefulWidget {
@@ -45,6 +46,38 @@ class _LoginPageState extends State<LoginPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
     }
+  }
+
+  Future<void> _openPasswordRecovery() async {
+    FocusScope.of(context).unfocus();
+
+    final returnedEmail = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => RecuperarContrasenaPage(
+          initialEmail: _correoController.text.trim(),
+        ),
+      ),
+    );
+
+    if (!mounted || returnedEmail == null || returnedEmail.isEmpty) return;
+    _correoController.text = returnedEmail;
+  }
+
+  void _showSupportContact() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 7),
+          content: Text(
+            'Si necesitas ayuda, puedes solicitarla directamente al administrador.\n'
+            'Soporte administrativo\n'
+            'Correo: serranorover436@gmail.com\n'
+            'Teléfono: 71338567',
+          ),
+        ),
+      );
   }
 
   @override
@@ -201,6 +234,17 @@ class _LoginPageState extends State<LoginPage> {
                                     return null;
                                   },
                                 ),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: TextButton(
+                                    onPressed: vm.isLoading
+                                        ? null
+                                        : _openPasswordRecovery,
+                                    child: const Text(
+                                      '¿Olvidaste tu contraseña?',
+                                    ),
+                                  ),
+                                ),
                                 const SizedBox(height: 16),
                                 PrimaryButton(
                                   label: vm.isLoading
@@ -216,15 +260,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 10),
                       TextButton.icon(
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Soporte: contacta al administrador.',
-                              ),
-                            ),
-                          );
-                        },
+                        onPressed: _showSupportContact,
                         icon: const Icon(Icons.support_agent_rounded, size: 18),
                         label: const Text('Necesito ayuda de soporte'),
                       ),
