@@ -27,6 +27,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/logoApp.png
 
 #name: frontend
 #description: "A new Flutter project."
@@ -55,4 +57,3 @@ flutter:
 #  flutter_lints: ^6.0.0
 #flutter:
 #  uses-material-design: true
-

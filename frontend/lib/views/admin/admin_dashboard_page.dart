@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/models/usuario_model.dart';
+import '../common/bovisense_logo.dart';
 import '../common/session_actions.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
 import '../../viewmodels/auth_view_model.dart';
@@ -89,7 +90,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Administrador'),
+        title: const Row(
+          children: [
+            BoviSenseLogoCompact(size: 24),
+            SizedBox(width: 8),
+            Text('Administrador'),
+          ],
+        ),
         actions: const [SessionActionsMenu()],
       ),
       floatingActionButton: FloatingActionButton.extended(

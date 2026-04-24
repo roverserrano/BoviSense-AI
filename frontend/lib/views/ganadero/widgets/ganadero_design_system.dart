@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/conteo_model.dart';
+import '../../common/bovisense_logo.dart';
 
 class GanaderoColors {
   static const Color primary = Color(0xFF4A6741);
@@ -68,9 +69,16 @@ class GanaderoAppBar extends AppBar {
     : super(
         backgroundColor: GanaderoColors.primary,
         foregroundColor: GanaderoColors.buttonText,
-        title: Text(
-          titleText,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        titleSpacing: 12,
+        title: Row(
+          children: [
+            const BoviSenseLogoCompact(size: 24),
+            const SizedBox(width: 8),
+            Text(
+              titleText,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ],
         ),
         elevation: 0,
         scrolledUnderElevation: 0,
