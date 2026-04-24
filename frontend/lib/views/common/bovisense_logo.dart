@@ -9,7 +9,7 @@ class BoviSenseLogo extends StatelessWidget {
     super.key,
     this.size = 132,
     this.showText = false,
-    this.title = 'BoviSense-AI',
+    this.title = 'BoviSense',
     this.subtitle,
   });
 

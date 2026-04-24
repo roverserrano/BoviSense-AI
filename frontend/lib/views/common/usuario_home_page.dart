@@ -23,7 +23,7 @@ class UsuarioHomePage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bobisense AI'),
+        title: const Text('BoviSense'),
         actions: [
           IconButton(
             onPressed: () => _logout(context),

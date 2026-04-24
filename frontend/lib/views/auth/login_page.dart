@@ -119,7 +119,7 @@ class _LoginPageState extends State<LoginPage> {
                             BoviSenseLogo(size: 150),
                             SizedBox(height: 10),
                             Text(
-                              'BoviSense-AI',
+                              'BoviSense',
                               style: TextStyle(
                                 fontSize: 22,
                                 fontWeight: FontWeight.w600,

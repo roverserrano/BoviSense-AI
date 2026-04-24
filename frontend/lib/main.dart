@@ -16,6 +16,7 @@ import 'viewmodels/admin_usuarios_view_model.dart';
 import 'viewmodels/auth_view_model.dart';
 import 'viewmodels/ganadero_view_model.dart';
 import 'views/auth_gate.dart';
+import 'views/common/app_splash_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +36,7 @@ Future<void> main() async {
   final ganaderoRepository = GanaderoRepository(apiClient: apiClient);
 
   runApp(
-    BobisenseAiApp(
+    BoviSenseApp(
       authRepository: authRepository,
       adminUsuarioRepository: adminUsuarioRepository,
       ganaderoRepository: ganaderoRepository,
@@ -43,8 +44,8 @@ Future<void> main() async {
   );
 }
 
-class BobisenseAiApp extends StatelessWidget {
-  const BobisenseAiApp({
+class BoviSenseApp extends StatelessWidget {
+  const BoviSenseApp({
     super.key,
     required this.authRepository,
     required this.adminUsuarioRepository,
@@ -75,9 +76,9 @@ class BobisenseAiApp extends StatelessWidget {
       child: _AppLifecycleSessionGuard(
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
-          title: 'Bobisense AI',
+          title: 'BoviSense',
           theme: AppTheme.lightTheme,
-          home: const AuthGate(),
+          home: const AppSplashScreen(child: AuthGate()),
         ),
       ),
     );
