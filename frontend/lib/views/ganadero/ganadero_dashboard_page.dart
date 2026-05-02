@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/utils/formatters.dart';
 import '../common/session_actions.dart';
 import '../../viewmodels/auth_view_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
@@ -42,13 +41,11 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
     final vm = context.watch<GanaderoViewModel>();
     final dashboard = vm.dashboard;
     final usuario = authVm.currentUser;
-    final now = DateTime.now();
-
     final (nextTitle, nextDescription, nextButton) = _nextStepContent(vm);
 
     return Scaffold(
       appBar: GanaderoAppBar(
-        titleText: 'Inicio',
+        titleText: 'Panel principal',
         actions: const [SessionActionsMenu()],
       ),
       bottomNavigationBar: GanaderoBottomNavBar(
@@ -66,18 +63,45 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text(
-              'Hola, ${usuario?.nombreCompleto ?? 'Ganadero'}',
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
-                color: GanaderoColors.textDark,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              formatDate(now),
-              style: const TextStyle(fontSize: 12, color: GanaderoColors.muted),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: GanaderoColors.surfaceAlt,
+                  child: const Icon(
+                    Icons.person_rounded,
+                    color: GanaderoColors.primary,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Hola, ${usuario?.nombreCompleto ?? 'Ganadero'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: GanaderoColors.textDark,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        (usuario?.rol ?? 'usuario'),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: GanaderoColors.muted,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 14),
             NextStepCard(

@@ -75,7 +75,6 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<GanaderoViewModel>();
-    final isConfigured = vm.configuracion != null;
 
     return Scaffold(
       appBar: GanaderoAppBar(
@@ -92,21 +91,17 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           children: [
-            if (isConfigured) ...[
-              const AlertCard(
-                title: 'Configuración lista',
-                description: 'La finca está preparada para iniciar conteos.',
-                status: SimpleStatusType.ready,
-              ),
-              const SizedBox(height: 14),
-            ],
-            const SectionTitle(text: 'Datos de la finca'),
             _GroupCard(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                //crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  const _FormHeader(
+                    title: 'Registro de la finca',
+                    subtitle: 'Completa estos datos para continuar.',
+                  ),
+                  const SizedBox(height: 14),
                   TextFormField(
                     controller: _nombreFincaController,
                     decoration: const InputDecoration(
@@ -137,24 +132,55 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
                       return null;
                     },
                   ),
+                  const SizedBox(height: 16),
+                  PrimaryButton(
+                    label: vm.isSavingConfig ? 'Guardando...' : 'Guardar',
+                    onPressed: vm.isSavingConfig ? null : _save,
+                    isLoading: vm.isSavingConfig,
+                  ),
+                  const SizedBox(height: 10),
+                  OutlineActionButton(
+                    label: 'Cancelar',
+                    onPressed: () => goToGanaderoTab(context, 0),
+                  ),
                 ],
               ),
-            ),
-            const SizedBox(height: 16),
-            const SectionTitle(text: 'Acciones'),
-            PrimaryButton(
-              label: vm.isSavingConfig ? 'Guardando...' : 'Guardar',
-              onPressed: vm.isSavingConfig ? null : _save,
-              isLoading: vm.isSavingConfig,
-            ),
-            const SizedBox(height: 10),
-            OutlineActionButton(
-              label: 'Cancelar',
-              onPressed: () => goToGanaderoTab(context, 0),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _FormHeader extends StatelessWidget {
+  const _FormHeader({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: GanaderoColors.textDark,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          subtitle,
+          style: const TextStyle(
+            fontSize: 12,
+            color: GanaderoColors.textSecondary,
+          ),
+        ),
+      ],
     );
   }
 }

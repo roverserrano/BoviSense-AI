@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/conteo_model.dart';
-import '../../common/bovisense_logo.dart';
 
 class GanaderoColors {
   static const Color primary = Color(0xFF4A6741);
@@ -70,15 +69,9 @@ class GanaderoAppBar extends AppBar {
         backgroundColor: GanaderoColors.primary,
         foregroundColor: GanaderoColors.buttonText,
         titleSpacing: 12,
-        title: Row(
-          children: [
-            const BoviSenseLogoCompact(size: 24),
-            const SizedBox(width: 8),
-            Text(
-              titleText,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-            ),
-          ],
+        title: Text(
+          titleText,
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
         ),
         elevation: 0,
         scrolledUnderElevation: 0,
@@ -755,40 +748,109 @@ class GanaderoBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        border: Border(
-          top: BorderSide(color: GanaderoColors.borderSoft, width: 0.5),
+    const items = [
+      (
+        icon: Icons.home_outlined,
+        activeIcon: Icons.home_rounded,
+        label: 'Inicio',
+      ),
+      (icon: Icons.map_outlined, activeIcon: Icons.map_rounded, label: 'Finca'),
+      (
+        icon: Icons.play_circle_outline_rounded,
+        activeIcon: Icons.play_circle_rounded,
+        label: 'Conteo',
+      ),
+      (
+        icon: Icons.history_rounded,
+        activeIcon: Icons.history_toggle_off_rounded,
+        label: 'Historial',
+      ),
+    ];
+
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: GanaderoColors.card,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: GanaderoColors.borderSoft, width: 0.8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Row(
+            children: List.generate(items.length, (index) {
+              final item = items[index];
+              final selected = currentIndex == index;
+              return Expanded(
+                child: _GanaderoNavItem(
+                  label: item.label,
+                  icon: selected ? item.activeIcon : item.icon,
+                  selected: selected,
+                  onTap: () => onTap(index),
+                ),
+              );
+            }),
+          ),
         ),
       ),
-      child: BottomNavigationBar(
-        currentIndex: currentIndex,
-        onTap: onTap,
-        type: BottomNavigationBarType.fixed,
-        elevation: 0,
-        backgroundColor: GanaderoColors.card,
-        selectedItemColor: GanaderoColors.primary,
-        unselectedItemColor: GanaderoColors.muted,
-        selectedFontSize: 10,
-        unselectedFontSize: 10,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_outlined),
-            label: 'Inicio',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map_outlined),
-            label: 'Finca',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.play_circle_outline_rounded),
-            label: 'Conteo',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.history_rounded),
-            label: 'Historial',
-          ),
-        ],
+    );
+  }
+}
+
+class _GanaderoNavItem extends StatelessWidget {
+  const _GanaderoNavItem({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFE9F2E4) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: selected ? GanaderoColors.primary : GanaderoColors.muted,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? GanaderoColors.primary : GanaderoColors.muted,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

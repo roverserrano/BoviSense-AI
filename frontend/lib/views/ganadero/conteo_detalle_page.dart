@@ -75,25 +75,6 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
                     : 'Excedente',
               ),
               const SizedBox(height: 14),
-              if (conteo.diferencia != 0)
-                AlertCard(
-                  title: conteo.diferencia < 0
-                      ? 'Faltante detectado'
-                      : 'Excedente detectado',
-                  description: conteo.diferencia < 0
-                      ? 'Revisa el lote: faltan ${conteo.diferencia.abs()} animales respecto al esperado.'
-                      : 'Revisa el lote: hay ${conteo.diferencia.abs()} animales por encima del esperado.',
-                  status: conteo.diferencia < 0
-                      ? SimpleStatusType.inProgress
-                      : SimpleStatusType.error,
-                )
-              else
-                const AlertCard(
-                  title: 'Conteo correcto',
-                  description: 'El total coincide con la cantidad esperada.',
-                  status: SimpleStatusType.ready,
-                ),
-              const SizedBox(height: 14),
               OutlineActionButton(
                 label: 'Volver',
                 onPressed: () => Navigator.of(context).pop(),
