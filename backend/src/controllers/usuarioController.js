@@ -28,8 +28,29 @@ function mapFirebaseError(error) {
             return 'Correo inválido.';
         case 'auth/invalid-password':
             return 'La contraseña generada no es válida.';
+        case 'mail/auth-failed':
+            return 'No se pudo autenticar el envío de correo. Revisa la contraseña de aplicación de Gmail o cambia a OAuth2.';
+        case 'mail/send-failed':
+            return 'No se pudo enviar el correo de credenciales. El registro fue revertido.';
+        case 'password/generation-failed':
+            return 'No se pudo generar la contraseña inicial.';
         default:
             return error?.message || 'Error interno del servidor.';
+    }
+}
+
+function getHttpStatusFromError(error) {
+    switch (error?.code) {
+        case 'auth/email-already-exists':
+            return 409;
+        case 'auth/invalid-email':
+        case 'auth/invalid-password':
+            return 400;
+        case 'mail/send-failed':
+        case 'password/generation-failed':
+            return 500;
+        default:
+            return 500;
     }
 }
 
@@ -110,7 +131,41 @@ function validarPayload(body) {
     };
 }
 
-enviarCredenciales
+async function rollbackUsuarioCreado({ uid, cedulaIdentidad }) {
+    const cleanupErrors = [];
+
+    if (uid) {
+        await auth.deleteUser(uid).catch((error) => {
+            cleanupErrors.push({
+                step: 'auth.deleteUser',
+                code: error?.code,
+                message: error?.message,
+            });
+        });
+
+        await usuariosCollection.doc(uid).delete().catch((error) => {
+            cleanupErrors.push({
+                step: 'usuariosCollection.delete',
+                code: error?.code,
+                message: error?.message,
+            });
+        });
+    }
+
+    if (cedulaIdentidad) {
+        await cedulasCollection.doc(String(cedulaIdentidad)).delete().catch((error) => {
+            cleanupErrors.push({
+                step: 'cedulasCollection.delete',
+                code: error?.code,
+                message: error?.message,
+            });
+        });
+    }
+
+    if (cleanupErrors.length > 0) {
+        console.error('[ROLLBACK] Se presentaron errores durante la reversión:', cleanupErrors);
+    }
+}
 
 async function listarUsuarios(req, res) {
     try {
@@ -149,7 +204,19 @@ async function crearUsuario(req, res) {
             });
         }
 
-        const password = generarPasswordInicial(payload.nombre, payload.apellidos);
+        let password;
+        try {
+            password = generarPasswordInicial(payload.nombre, payload.apellidos);
+        } catch (error) {
+            console.error('Error generando contraseña inicial:', error);
+            const wrappedError = new Error(
+                'No se pudo generar la contraseña inicial.',
+            );
+            wrappedError.code = 'password/generation-failed';
+            wrappedError.cause = error;
+            throw wrappedError;
+        }
+
         const nombreCompleto = `${payload.nombre} ${payload.apellidos}`.trim();
 
         const userRecord = await auth.createUser({
@@ -162,7 +229,7 @@ async function crearUsuario(req, res) {
         createdUid = userRecord.uid;
         createdCedulaDoc = String(payload.cedula_identidad);
 
-        await usuariosCollection.doc(createdUid).set({
+        const usuarioData = {
             nombre: payload.nombre,
             apellidos: payload.apellidos,
             cedula_identidad: payload.cedula_identidad,
@@ -172,7 +239,9 @@ async function crearUsuario(req, res) {
             estado: payload.estado,
             fecha_registro: FieldValue.serverTimestamp(),
             fecha_actualizacion: FieldValue.serverTimestamp(),
-        });
+        };
+
+        await usuariosCollection.doc(createdUid).set(usuarioData);
 
         await cedulasCollection.doc(String(payload.cedula_identidad)).set({
             uid: createdUid,
@@ -190,6 +259,21 @@ async function crearUsuario(req, res) {
             });
         } catch (error) {
             console.error('[MAIL] Error enviando credenciales:', error);
+            const mailAuthFailed =
+                error?.code === 'EAUTH' ||
+                error?.responseCode === 535 ||
+                error?.cause?.code === 'EAUTH' ||
+                error?.cause?.responseCode === 535;
+            const wrappedError = new Error(
+                mailAuthFailed
+                    ? 'No se pudo autenticar el envío de correo.'
+                    : 'No se pudo enviar el correo de credenciales.',
+            );
+            wrappedError.code = mailAuthFailed
+                ? 'mail/auth-failed'
+                : 'mail/send-failed';
+            wrappedError.cause = error;
+            throw wrappedError;
         }
 
         return res.status(201).json({
@@ -199,16 +283,12 @@ async function crearUsuario(req, res) {
     } catch (error) {
         console.error('Error creando usuario:', error);
 
-        if (createdUid) {
-            await auth.deleteUser(createdUid).catch(() => null);
-            await usuariosCollection.doc(createdUid).delete().catch(() => null);
-        }
+        await rollbackUsuarioCreado({
+            uid: createdUid,
+            cedulaIdentidad: createdCedulaDoc,
+        });
 
-        if (createdCedulaDoc) {
-            await cedulasCollection.doc(createdCedulaDoc).delete().catch(() => null);
-        }
-
-        return res.status(400).json({
+        return res.status(getHttpStatusFromError(error)).json({
             message: mapFirebaseError(error),
         });
     }

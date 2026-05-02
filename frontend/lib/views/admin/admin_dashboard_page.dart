@@ -4,7 +4,16 @@ import 'package:provider/provider.dart';
 import '../../data/models/usuario_model.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
 import '../../viewmodels/auth_view_model.dart';
+import '../common/session_actions.dart';
 import 'usuario_form_page.dart';
+import 'widgets/admin_empty_state.dart';
+import 'widgets/admin_fab.dart';
+import 'widgets/admin_search_bar.dart';
+import 'widgets/admin_tokens.dart';
+import 'widgets/delete_confirm_dialog.dart';
+import 'widgets/filter_chip_row.dart';
+import 'widgets/section_label.dart';
+import 'widgets/user_card.dart';
 
 class AdminDashboardPage extends StatefulWidget {
   const AdminDashboardPage({super.key});
@@ -14,12 +23,21 @@ class AdminDashboardPage extends StatefulWidget {
 }
 
 class _AdminDashboardPageState extends State<AdminDashboardPage> {
+  final TextEditingController _searchController = TextEditingController();
+  AdminFilterType _selectedFilter = AdminFilterType.all;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AdminUsuariosViewModel>().loadUsers();
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _openForm([UsuarioModel? usuario]) async {
@@ -43,25 +61,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   }
 
   Future<void> _confirmDelete(UsuarioModel usuario) async {
-    final confirm =
-        await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Eliminar usuario'),
-            content: Text('¿Deseas eliminar a ${usuario.nombreCompleto}?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancelar'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Eliminar'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
+    final confirm = await showDeleteConfirmDialog(
+      context: context,
+      userName: usuario.nombreCompleto,
+    );
 
     if (!confirm || !mounted) return;
 
@@ -81,161 +84,167 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     );
   }
 
+  List<UsuarioModel> _filteredUsers(List<UsuarioModel> source) {
+    final query = _searchController.text.trim().toLowerCase();
+
+    return source.where((usuario) {
+      final byQuery =
+          query.isEmpty ||
+          usuario.nombreCompleto.toLowerCase().contains(query) ||
+          usuario.correo.toLowerCase().contains(query);
+
+      final rol = usuario.rol.toLowerCase();
+      final estado = usuario.estado.toLowerCase();
+
+      final byFilter = switch (_selectedFilter) {
+        AdminFilterType.all => true,
+        AdminFilterType.active => estado == 'activo',
+        AdminFilterType.inactive => estado == 'inactivo',
+        AdminFilterType.admins => rol == 'administrador',
+      };
+
+      return byQuery && byFilter;
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     final authVm = context.watch<AuthViewModel>();
     final vm = context.watch<AdminUsuariosViewModel>();
+    final usuarios = vm.usuarios;
+    final usuariosFiltrados = _filteredUsers(usuarios);
 
     return Scaffold(
+      backgroundColor: AdminPalette.pageBg,
       appBar: AppBar(
-        title: const Text('Administrador'),
-        actions: [
-          IconButton(
-            onPressed: () => context.read<AuthViewModel>().logout(),
-            icon: const Icon(Icons.logout_rounded),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: vm.isSaving ? null : () => _openForm(),
-        icon: const Icon(Icons.person_add_alt_1_rounded),
-        label: const Text('Nuevo usuario'),
+        backgroundColor: AdminPalette.appBar,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        titleSpacing: 12,
+        title: const Text(
+          'Panel de administración',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        toolbarHeight: 68,
+        actions: const [SessionActionsMenu()],
       ),
       body: RefreshIndicator(
         onRefresh: vm.loadUsers,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+        child: Stack(
           children: [
-            Card(
-              child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFF2E7D32),
-                  child: Icon(
-                    Icons.admin_panel_settings_rounded,
-                    color: Colors.white,
-                  ),
-                ),
-                title: Text(
-                  'Bienvenido, ${authVm.currentUser?.nombreCompleto ?? 'Administrador'}',
-                ),
-                subtitle: const Text('Gestión de usuarios del sistema'),
-              ),
-            ),
-            if (vm.errorMessage != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                color: Colors.red.shade50,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    vm.errorMessage!,
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            if (vm.isLoading && vm.usuarios.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 80),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (vm.usuarios.isEmpty)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    children: const [
-                      Icon(
-                        Icons.people_outline_rounded,
-                        size: 56,
-                        color: Color(0xFF2E7D32),
+            ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: AdminPalette.chipBg,
+                      child: const Icon(
+                        Icons.person_rounded,
+                        color: AdminPalette.primary,
                       ),
-                      SizedBox(height: 12),
-                      Text('No hay usuarios para mostrar'),
-                    ],
-                  ),
-                ),
-              )
-            else
-              ...vm.usuarios.map(
-                (usuario) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              CircleAvatar(
-                                backgroundColor: usuario.rol == 'administrador'
-                                    ? const Color(0xFF8D6E63)
-                                    : const Color(0xFF4CAF50),
-                                child: Icon(
-                                  usuario.rol == 'administrador'
-                                      ? Icons.admin_panel_settings_rounded
-                                      : Icons.person_rounded,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      usuario.nombreCompleto,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    Text(usuario.correo),
-                                  ],
-                                ),
-                              ),
-                              Chip(label: Text(usuario.estado)),
-                            ],
+                          Text(
+                            'Hola, ${authVm.currentUser?.nombreCompleto ?? 'Administrador'}',
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: AdminPalette.textPrimary,
+                            ),
                           ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              Chip(
-                                label: Text('CI: ${usuario.cedulaIdentidad}'),
-                              ),
-                              Chip(label: Text('Tel: ${usuario.telefono}')),
-                              Chip(label: Text('Rol: ${usuario.rol}')),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              TextButton.icon(
-                                onPressed: vm.isSaving
-                                    ? null
-                                    : () => _openForm(usuario),
-                                icon: const Icon(Icons.edit_rounded),
-                                label: const Text('Editar'),
-                              ),
-                              TextButton.icon(
-                                onPressed: vm.isSaving
-                                    ? null
-                                    : () => _confirmDelete(usuario),
-                                icon: const Icon(Icons.delete_outline_rounded),
-                                label: const Text('Eliminar'),
-                              ),
-                            ],
+                          const SizedBox(height: 4),
+                          Text(
+                            authVm.currentUser?.rol ?? 'administrador',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AdminPalette.muted,
+                            ),
                           ),
                         ],
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                AdminSearchBar(
+                  controller: _searchController,
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 10),
+                FilterChipRow(
+                  selected: _selectedFilter,
+                  onSelected: (value) =>
+                      setState(() => _selectedFilter = value),
+                ),
+                const SizedBox(height: 14),
+                const SectionLabel(text: 'Usuarios registrados'),
+                if (vm.errorMessage != null)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFCEBEB),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AdminPalette.border,
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Text(
+                      vm.errorMessage!,
+                      style: const TextStyle(
+                        color: Color(0xFF7A2820),
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
+                if (vm.isLoading && usuarios.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 70),
+                    child: Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else if (usuariosFiltrados.isEmpty)
+                  AdminEmptyState(
+                    title: usuarios.isEmpty
+                        ? 'No hay usuarios'
+                        : 'Sin coincidencias',
+                    description: usuarios.isEmpty
+                        ? 'Aún no hay usuarios registrados en el sistema.'
+                        : 'Prueba otro nombre, correo o cambia los filtros.',
+                  )
+                else
+                  ...usuariosFiltrados.map(
+                    (usuario) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: UserCard(
+                        usuario: usuario,
+                        isBusy: vm.isSaving,
+                        onEdit: () => _openForm(usuario),
+                        onDelete: () => _confirmDelete(usuario),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: SafeArea(
+                child: AdminFloatingFab(
+                  onPressed: vm.isSaving ? null : () => _openForm(),
                 ),
               ),
+            ),
           ],
         ),
       ),

@@ -1,5 +1,9 @@
 const nodemailer = require('nodemailer');
 
+function normalizeSmtpPassword(value) {
+    return (value || '').toString().replace(/\s+/g, '');
+}
+
 function getTransportConfig() {
     return {
         host: process.env.SMTP_HOST,
@@ -7,7 +11,7 @@ function getTransportConfig() {
         secure: process.env.SMTP_SECURE === 'true',
         auth: {
             user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
+            pass: normalizeSmtpPassword(process.env.SMTP_PASS),
         },
         connectionTimeout: 10000,
         greetingTimeout: 10000,
@@ -19,11 +23,12 @@ function getTransportConfig() {
 
 function validateMailEnv() {
     const missing = [];
+    const smtpPass = normalizeSmtpPassword(process.env.SMTP_PASS);
 
     if (!process.env.SMTP_HOST) missing.push('SMTP_HOST');
     if (!process.env.SMTP_PORT) missing.push('SMTP_PORT');
     if (!process.env.SMTP_USER) missing.push('SMTP_USER');
-    if (!process.env.SMTP_PASS) missing.push('SMTP_PASS');
+    if (!smtpPass) missing.push('SMTP_PASS');
     if (!process.env.SMTP_FROM) missing.push('SMTP_FROM');
 
     if (missing.length > 0) {

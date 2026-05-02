@@ -2,9 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../viewmodels/auth_view_model.dart';
+import '../auth_gate.dart';
 
 class UsuarioHomePage extends StatelessWidget {
   const UsuarioHomePage({super.key});
+
+  Future<void> _logout(BuildContext context) async {
+    await context.read<AuthViewModel>().logout();
+    if (!context.mounted) return;
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthGate()),
+      (_) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -12,10 +23,10 @@ class UsuarioHomePage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bobisense AI'),
+        title: const Text('BoviSense'),
         actions: [
           IconButton(
-            onPressed: () => context.read<AuthViewModel>().logout(),
+            onPressed: () => _logout(context),
             icon: const Icon(Icons.logout_rounded),
           ),
         ],

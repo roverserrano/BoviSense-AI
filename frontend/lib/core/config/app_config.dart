@@ -1,6 +1,6 @@
 class AppConfig {
   // En telefono fisico, usa la IP local del servidor backend.
-  static const String apiBaseUrl = 'http://192.168.1.3:3000';
+  static const String apiBaseUrl = 'http://192.168.1.7:3000';
 
   // ESP8266 conectado al hotspot del celular:
   // SSID: HONOR X8b
