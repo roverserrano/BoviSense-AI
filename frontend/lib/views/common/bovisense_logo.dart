@@ -11,12 +11,16 @@ class BoviSenseLogo extends StatelessWidget {
     this.showText = false,
     this.title = 'BoviSense',
     this.subtitle,
+    this.fit = BoxFit.contain,
+    this.alignment = Alignment.center,
   });
 
   final double size;
   final bool showText;
   final String title;
   final String? subtitle;
+  final BoxFit fit;
+  final Alignment alignment;
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +30,7 @@ class BoviSenseLogo extends StatelessWidget {
         SizedBox(
           width: size,
           height: size,
-          child: _LogoImage(size: size),
+          child: _LogoImage(size: size, fit: fit, alignment: alignment),
         ),
         if (showText) ...[
           const SizedBox(height: 10),
@@ -78,22 +82,33 @@ class BoviSenseLogoCompact extends StatelessWidget {
       padding: const EdgeInsets.all(2),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(4),
-        child: _LogoImage(size: size),
+        child: _LogoImage(
+          size: size,
+          fit: BoxFit.contain,
+          alignment: Alignment.center,
+        ),
       ),
     );
   }
 }
 
 class _LogoImage extends StatelessWidget {
-  const _LogoImage({required this.size});
+  const _LogoImage({
+    required this.size,
+    required this.fit,
+    required this.alignment,
+  });
 
   final double size;
+  final BoxFit fit;
+  final Alignment alignment;
 
   @override
   Widget build(BuildContext context) {
     return Image.asset(
       BoviSenseBrand.logoAssetPath,
-      fit: BoxFit.contain,
+      fit: fit,
+      alignment: alignment,
       filterQuality: FilterQuality.high,
       errorBuilder: (_, __, ___) {
         return Container(
