@@ -22,13 +22,14 @@ class UserCard extends StatelessWidget {
     final isAdmin = usuario.rol.toLowerCase() == 'administrador';
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AdminPalette.card,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AdminPalette.border, width: 0.5),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -53,15 +54,19 @@ class UserCard extends StatelessWidget {
                   children: [
                     Text(
                       usuario.nombreCompleto,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 14,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w700,
                         color: AdminPalette.textPrimary,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 4),
                     Text(
                       usuario.correo,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 11,
                         color: AdminPalette.muted,
@@ -70,28 +75,16 @@ class UserCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              _stateBadge(usuario.estado),
             ],
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _metaChip('CI: ${usuario.cedulaIdentidad}'),
-              _metaChip('Tel: ${usuario.telefono}'),
-              _roleBadge(usuario.rol),
-            ],
-          ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: isBusy ? null : onEdit,
                   style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 52),
+                    minimumSize: const Size(double.infinity, 38),
                     elevation: 0,
                     foregroundColor: AdminPalette.primary,
                     side: const BorderSide(
@@ -102,7 +95,7 @@ class UserCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  icon: const Icon(Icons.edit_rounded, size: 18),
+                  icon: const Icon(Icons.edit_rounded, size: 16),
                   label: const Text('Editar'),
                 ),
               ),
@@ -111,7 +104,7 @@ class UserCard extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: isBusy ? null : onDelete,
                   style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 52),
+                    minimumSize: const Size(double.infinity, 38),
                     elevation: 0,
                     foregroundColor: AdminPalette.danger,
                     side: const BorderSide(
@@ -122,67 +115,13 @@ class UserCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16),
                   label: const Text('Eliminar'),
                 ),
               ),
             ],
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _metaChip(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: AdminPalette.chipBg,
-        borderRadius: BorderRadius.circular(100),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(fontSize: 11, color: AdminPalette.textPrimary),
-      ),
-    );
-  }
-
-  Widget _roleBadge(String rol) {
-    final label = rol.toLowerCase() == 'administrador'
-        ? 'Rol: Admin'
-        : 'Rol: Usuario';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: AdminPalette.activeBg,
-        borderRadius: BorderRadius.circular(100),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 11,
-          color: AdminPalette.activeText,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
-  }
-
-  Widget _stateBadge(String estado) {
-    final isActive = estado.toLowerCase() == 'activo';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: isActive ? AdminPalette.activeBg : AdminPalette.inactiveBg,
-        borderRadius: BorderRadius.circular(100),
-      ),
-      child: Text(
-        estado,
-        style: TextStyle(
-          fontSize: 11,
-          color: isActive ? AdminPalette.activeText : AdminPalette.inactiveText,
-          fontWeight: FontWeight.w500,
-        ),
       ),
     );
   }
