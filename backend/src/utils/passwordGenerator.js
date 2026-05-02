@@ -11,10 +11,16 @@ function normalizeText(value = '') {
 }
 
 function generarPasswordInicial(nombre, apellidos) {
-    const firstName = normalizeText(nombre).split(' ').filter(Boolean)[0] || 'u';
-    const firstLastName = normalizeText(apellidos).split(' ').filter(Boolean)[0] || 'usuario';
+  const firstName = normalizeText(nombre).split(' ').filter(Boolean)[0] || 'u';
+  const firstLastName = normalizeText(apellidos).split(' ').filter(Boolean)[0] || 'usuario';
 
-    return `${firstName[0]}${firstLastName}`;
+    const password = `${firstName[0]}${firstLastName}`;
+
+    if (!password || password.length < 4) {
+        throw new Error('No se pudo generar la contraseña inicial.');
+    }
+
+    return password;
 }
 
 module.exports = {
