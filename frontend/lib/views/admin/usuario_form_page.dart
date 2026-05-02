@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/models/usuario_model.dart';
@@ -72,7 +73,7 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
       correo: _correoController.text.trim().toLowerCase(),
       telefono: int.parse(_telefonoController.text.trim()),
       rol: _rol,
-      estado: _estado,
+      estado: _isEditing ? _estado : 'activo',
       fechaRegistro: widget.usuario?.fechaRegistro,
     );
 
@@ -117,26 +118,6 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
               _identityCard(widget.usuario!),
               const SizedBox(height: 14),
             ],
-            if (!_isEditing) ...[
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF0F7E8),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AdminPalette.border, width: 0.5),
-                ),
-                child: const Text(
-                  'La contraseña inicial se genera automáticamente a partir del nombre y apellido. '
-                  'Ejemplo: Juan Pérez -> jperez. Luego se envía por correo electrónico.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF3B6D11),
-                    height: 1.35,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-            ],
             const SectionLabel(text: 'Datos personales'),
             _sectionCard(
               children: [
@@ -173,6 +154,10 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                   child: TextFormField(
                     controller: _cedulaController,
                     keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(8),
+                    ],
                     decoration: _fieldDecoration(),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
@@ -180,6 +165,10 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       }
                       if (int.tryParse(value.trim()) == null) {
                         return 'La cédula debe ser numérica';
+                      }
+                      final length = value.trim().length;
+                      if (length < 7 || length > 8) {
+                        return 'La cédula debe tener 7 u 8 dígitos';
                       }
                       return null;
                     },
@@ -215,6 +204,10 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                   child: TextFormField(
                     controller: _telefonoController,
                     keyboardType: TextInputType.phone,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(8),
+                    ],
                     decoration: _fieldDecoration(),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
@@ -222,6 +215,9 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       }
                       if (int.tryParse(value.trim()) == null) {
                         return 'El teléfono debe ser numérico';
+                      }
+                      if (value.trim().length != 8) {
+                        return 'El teléfono debe tener 8 dígitos';
                       }
                       return null;
                     },
@@ -248,20 +244,47 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                   },
                 ),
                 _thinDivider(),
-                _dropdownRow(
-                  label: 'Estado',
-                  value: _estado,
-                  items: const [
-                    DropdownMenuItem(value: 'activo', child: Text('Activo')),
-                    DropdownMenuItem(
-                      value: 'inactivo',
-                      child: Text('Inactivo'),
+                if (_isEditing)
+                  _dropdownRow(
+                    label: 'Estado',
+                    value: _estado,
+                    items: const [
+                      DropdownMenuItem(value: 'activo', child: Text('Activo')),
+                      DropdownMenuItem(
+                        value: 'inactivo',
+                        child: Text('Inactivo'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) setState(() => _estado = value);
+                    },
+                  )
+                else
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Estado',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AdminPalette.textPrimary,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          'Activo',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AdminPalette.activeText,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _estado = value);
-                  },
-                ),
+                  ),
               ],
             ),
             const SizedBox(height: 20),
