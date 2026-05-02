@@ -37,7 +37,14 @@ app.use((_, res) => {
 
 const PORT = Number(process.env.PORT || 3000);
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor corriendo en http://0.0.0.0:${PORT}`);
-    console.log('GOOGLE_APPLICATION_CREDENTIALS =', process.env.GOOGLE_APPLICATION_CREDENTIALS || 'NO DEFINIDO');
-});
+if (process.env.VERCEL !== '1') {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Servidor corriendo en http://0.0.0.0:${PORT}`);
+        console.log(
+            'GOOGLE_APPLICATION_CREDENTIALS =',
+            process.env.GOOGLE_APPLICATION_CREDENTIALS || 'NO DEFINIDO',
+        );
+    });
+}
+
+module.exports = app;
