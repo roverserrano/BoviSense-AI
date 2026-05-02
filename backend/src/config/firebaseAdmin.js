@@ -6,25 +6,37 @@ require('dotenv').config({
     path: path.resolve(__dirname, '../../.env'),
 });
 
+let serviceAccount;
+const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-if (!serviceAccountPath) {
-    throw new Error(
-        'GOOGLE_APPLICATION_CREDENTIALS no está definido. Revisa el archivo .env',
-    );
+if (serviceAccountJson) {
+    try {
+        serviceAccount = JSON.parse(serviceAccountJson);
+    } catch (error) {
+        throw new Error(
+            'FIREBASE_SERVICE_ACCOUNT_JSON no es un JSON válido.',
+        );
+    }
+} else {
+    if (!serviceAccountPath) {
+        throw new Error(
+            'Define FIREBASE_SERVICE_ACCOUNT_JSON o GOOGLE_APPLICATION_CREDENTIALS en el entorno.',
+        );
+    }
+
+    const absoluteServiceAccountPath = path.isAbsolute(serviceAccountPath)
+        ? serviceAccountPath
+        : path.resolve(__dirname, '../../', serviceAccountPath);
+
+    if (!fs.existsSync(absoluteServiceAccountPath)) {
+        throw new Error(
+            `No existe el archivo de cuenta de servicio en: ${absoluteServiceAccountPath}`,
+        );
+    }
+
+    serviceAccount = require(absoluteServiceAccountPath);
 }
-
-const absoluteServiceAccountPath = path.isAbsolute(serviceAccountPath)
-    ? serviceAccountPath
-    : path.resolve(__dirname, '../../', serviceAccountPath);
-
-if (!fs.existsSync(absoluteServiceAccountPath)) {
-    throw new Error(
-        `No existe el archivo de cuenta de servicio en: ${absoluteServiceAccountPath}`,
-    );
-}
-
-const serviceAccount = require(absoluteServiceAccountPath);
 
 if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
     throw new Error(
