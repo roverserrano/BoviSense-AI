@@ -1,4 +1,8 @@
 const { db, FieldValue } = require('../config/firebaseAdmin');
+const { object, text, integer, documentId, hexId, HttpError, respondError } = require('../utils/validation');
+const { page } = require('../utils/pagination');
+const { createIotService } = require('../services/iotService');
+const iot = createIotService(db);
 
 function serializeTimestamp(value) {
     if (!value) return null;
@@ -114,24 +118,6 @@ async function getDispositivo(uid) {
     return mapDispositivo(current);
 }
 
-function validarConfiguracion(body) {
-    const nombreFinca = (body.nombre_finca || body.nombreFinca || '').toString().trim();
-    const cantidadEsperada = toInt(body.cantidad_esperada ?? body.cantidadEsperada);
-
-    if (!nombreFinca) {
-        throw new Error('El nombre de la finca es obligatorio.');
-    }
-
-    if (!Number.isInteger(cantidadEsperada) || cantidadEsperada <= 0) {
-        throw new Error('La cantidad esperada debe ser un número mayor a cero.');
-    }
-
-    return {
-        nombre_finca: nombreFinca,
-        cantidad_esperada: cantidadEsperada,
-    };
-}
-
 function calcularDiferencia(cantidadEsperada, cantidadDetectada) {
     return cantidadDetectada - cantidadEsperada;
 }
@@ -167,280 +153,133 @@ function buildAlertData(diferencia) {
 
 async function obtenerDashboard(req, res) {
     try {
-        const uid = req.user.uid;
-        const refs = getRefs(uid);
-
-        const [
-            configuracionSnap,
-            dispositivoData,
-            conteosCountSnap,
-            alertasPendientesSnap,
-            conteosRecientesSnap,
-            alertasRecientesSnap,
-        ] = await Promise.all([
-            refs.configRef.get(),
-            getDispositivo(uid),
-            refs.conteosRef.get(),
-            refs.alertasRef.where('leida', '==', false).get(),
+        const refs = getRefs(req.user.uid);
+        const [config, device, counts, alerts, recent, recentAlerts] = await Promise.all([
+            refs.configRef.get(), getDispositivo(req.user.uid),
+            refs.conteosRef.count().get(), refs.alertasRef.where('leida', '==', false).count().get(),
             refs.conteosRef.orderBy('fecha_hora_inicio', 'desc').limit(5).get(),
             refs.alertasRef.orderBy('fecha_hora', 'desc').limit(5).get(),
         ]);
-
-        const configuracion = mapConfiguracion(configuracionSnap);
-        const conteosRecientes = conteosRecientesSnap.docs.map(mapConteo);
-        const alertasRecientes = alertasRecientesSnap.docs.map(mapAlerta);
-        const ultimoConteo = conteosRecientes.length > 0 ? conteosRecientes[0] : null;
-
-        return res.status(200).json({
-            configuracion,
-            dispositivo: dispositivoData,
-            conteos_recientes: conteosRecientes,
-            alertas_recientes: alertasRecientes,
-            ultimo_conteo: ultimoConteo,
-            cantidad_conteos: conteosCountSnap.size,
-            alertas_pendientes: alertasPendientesSnap.size,
-            ultima_diferencia: ultimoConteo ? ultimoConteo.diferencia : 0,
+        const conteos = recent.docs.map(mapConteo);
+        return res.json({
+            configuracion: mapConfiguracion(config), dispositivo: device,
+            conteos_recientes: conteos, alertas_recientes: recentAlerts.docs.map(mapAlerta),
+            ultimo_conteo: conteos[0] || null, cantidad_conteos: counts.data().count,
+            alertas_pendientes: alerts.data().count, ultima_diferencia: conteos[0]?.diferencia || 0,
         });
-    } catch (error) {
-        console.error('Error obteniendo dashboard del ganadero:', error);
-        return res.status(500).json({
-            message: error.message || 'No se pudo obtener el dashboard.',
-        });
-    }
+    } catch (error) { return respondError(res, error); }
 }
 
 async function obtenerConfiguracion(req, res) {
     try {
-        const refs = getRefs(req.user.uid);
-        const snapshot = await refs.configRef.get();
-
-        return res.status(200).json({
-            configuracion: mapConfiguracion(snapshot),
-        });
-    } catch (error) {
-        return res.status(500).json({
-            message: error.message || 'No se pudo obtener la configuración.',
-        });
-    }
+        return res.json({ configuracion: mapConfiguracion(await getRefs(req.user.uid).configRef.get()) });
+    } catch (error) { return respondError(res, error); }
 }
 
 async function guardarConfiguracion(req, res) {
     try {
         const refs = getRefs(req.user.uid);
-        const payload = validarConfiguracion(req.body);
-
-        await refs.configRef.set(
-            {
-                ...payload,
-                fecha_actualizacion: FieldValue.serverTimestamp(),
-            },
-            { merge: true },
-        );
-
-        const saved = await refs.configRef.get();
-
-        return res.status(200).json({
-            message: 'Configuración guardada correctamente.',
-            configuracion: mapConfiguracion(saved),
-        });
-    } catch (error) {
-        return res.status(400).json({
-            message: error.message || 'No se pudo guardar la configuración.',
-        });
-    }
+        const body = object(req.body);
+        const payload = {
+            nombre_finca: text(body.nombre_finca, 'Nombre de finca'),
+            cantidad_esperada: integer(body.cantidad_esperada, 'Cantidad esperada', 1),
+        };
+        await refs.configRef.set({ ...payload, fecha_actualizacion: FieldValue.serverTimestamp() }, { merge: true });
+        return res.json({ configuracion: mapConfiguracion(await refs.configRef.get()), message: 'Configuracion guardada.' });
+    } catch (error) { return respondError(res, error); }
 }
 
 async function obtenerDispositivo(req, res) {
-    try {
-        const dispositivo = await getDispositivo(req.user.uid);
-
-        return res.status(200).json({
-            dispositivo,
-        });
-    } catch (error) {
-        return res.status(500).json({
-            message: error.message || 'No se pudo obtener el estado del dispositivo.',
-        });
-    }
+    try { return res.json({ dispositivo: await getDispositivo(req.user.uid) }); }
+    catch (error) { return respondError(res, error); }
 }
 
 async function registrarConteoReal(req, res) {
     try {
-        const uid = req.user.uid;
-        const refs = getRefs(uid);
-        const cantidadDetectadaRaw = req.body.cantidad_detectada ?? req.body.cantidadDetectada;
-        const cantidadDetectada = Number.parseInt(cantidadDetectadaRaw, 10);
-        const sessionId = (req.body.session_id || req.body.sessionId || '').toString().trim();
-
-        const configSnap = await refs.configRef.get();
-
-        if (!configSnap.exists) {
-            return res.status(400).json({
-                message: 'Debes configurar el sistema antes de iniciar un conteo.',
+        const body = object(req.body);
+        const sessionId = hexId(body.session_id);
+        const verified = await iot.verify(req.user.uid, body.proof);
+        if (verified.session !== sessionId || !verified.proof) throw new HttpError(400, 'Se requiere un resultado final autenticado.');
+        const refs = getRefs(req.user.uid);
+        const conteoRef = refs.conteosRef.doc(sessionId);
+        const alertRef = refs.alertasRef.doc(sessionId);
+        const created = await db.runTransaction(async tx => {
+            const session = await tx.get(db.collection('IotSessions').doc(sessionId));
+            const existing = await tx.get(conteoRef);
+            if (!session.exists || session.data().uid !== req.user.uid) throw new HttpError(403, 'Sesion invalida.');
+            if (existing.exists) return false;
+            const data = session.data();
+            if (!data.proof || data.count !== Number(verified.count)) throw new HttpError(409, 'El resultado de la sesion no coincide.');
+            const cantidad = integer(data.count, 'Cantidad detectada');
+            const esperada = integer(data.cantidad_esperada, 'Cantidad esperada', 1);
+            const diferencia = calcularDiferencia(esperada, cantidad);
+            tx.create(conteoRef, {
+                fecha_hora_inicio: data.started_at, fecha_hora_fin: data.finished_at,
+                cantidad_detectada: cantidad, cantidad_esperada: esperada, diferencia,
+                estado_conteo: 'finalizado', origen: 'lora_autenticado', session_id: sessionId,
+                device_id: data.device_id, nombre_finca: data.nombre_finca,
+                resumen: buildResumen(cantidad, esperada, diferencia),
             });
-        }
-
-        if (cantidadDetectadaRaw === undefined || !Number.isInteger(cantidadDetectada) || cantidadDetectada < 0) {
-            return res.status(400).json({
-                message: 'La cantidad detectada real es obligatoria y no puede ser negativa.',
-            });
-        }
-
-        const configuracion = mapConfiguracion(configSnap);
-        const diferencia = calcularDiferencia(
-            configuracion.cantidad_esperada,
-            cantidadDetectada,
-        );
-
-        const now = new Date();
-        const conteoRef = refs.conteosRef.doc();
-        const alertData = buildAlertData(diferencia);
-        const alertRef = alertData ? refs.alertasRef.doc() : null;
-        const batch = db.batch();
-
-        batch.set(conteoRef, {
-            fecha_hora_inicio: now,
-            fecha_hora_fin: now,
-            cantidad_detectada: cantidadDetectada,
-            cantidad_esperada: configuracion.cantidad_esperada,
-            diferencia,
-            estado_conteo: 'finalizado',
-            origen: 'lora',
-            session_id: sessionId || null,
-            resumen: buildResumen(
-                cantidadDetectada,
-                configuracion.cantidad_esperada,
-                diferencia,
-            ),
-        });
-
-        batch.set(
-            refs.deviceRef,
-            {
-                nombre_dispositivo: 'BoviSense Bridge',
-                tipo_dispositivo: 'ESP32 + LoRa + Jetson',
+            const alert = buildAlertData(diferencia);
+            if (alert) tx.create(alertRef, alert);
+            tx.set(refs.deviceRef, {
+                nombre_dispositivo: 'BoviSense Bridge', tipo_dispositivo: 'ESP32 + LoRa + Jetson',
                 ultima_sincronizacion: FieldValue.serverTimestamp(),
-                estado_conexion: 'conectado',
-                estado_operativo: 'disponible',
-                version_modelo: 'v1.0.0',
-                modo_operacion: 'lora',
-            },
-            { merge: true },
-        );
-
-        if (alertRef && alertData) {
-            batch.set(alertRef, alertData);
-        }
-
-        await batch.commit();
-
-        const createdConteo = await conteoRef.get();
-        const createdAlert = alertRef ? await alertRef.get() : null;
-
-        return res.status(201).json({
-            message: 'Conteo real registrado correctamente.',
-            conteo: mapConteo(createdConteo),
-            alerta: createdAlert ? mapAlerta(createdAlert) : null,
+                estado_conexion: 'desconocido', estado_operativo: 'conteo_finalizado', modo_operacion: 'lora',
+            }, { merge: true });
+            tx.update(session.ref, { saved: true });
+            return true;
         });
-    } catch (error) {
-        console.error('Error iniciando conteo:', error);
-        return res.status(500).json({
-            message: error.message || 'No se pudo iniciar el conteo.',
+        return res.status(created ? 201 : 200).json({
+            conteo: mapConteo(await conteoRef.get()), message: created ? 'Conteo guardado.' : 'El conteo ya estaba guardado.',
         });
-    }
+    } catch (error) { return respondError(res, error); }
 }
 
 async function listarConteos(req, res) {
     try {
-        const refs = getRefs(req.user.uid);
-        const snapshot = await refs.conteosRef.orderBy('fecha_hora_inicio', 'desc').get();
-
-        return res.status(200).json({
-            conteos: snapshot.docs.map(mapConteo),
-        });
-    } catch (error) {
-        return res.status(500).json({
-            message: error.message || 'No se pudo obtener el historial de conteos.',
-        });
-    }
+        const result = await page(getRefs(req.user.uid).conteosRef, req.query, 'fecha_hora_inicio');
+        return res.json({ conteos: result.docs.map(mapConteo), next_cursor: result.next_cursor });
+    } catch (error) { return respondError(res, error); }
 }
 
 async function obtenerConteoDetalle(req, res) {
     try {
-        const refs = getRefs(req.user.uid);
-        const snapshot = await refs.conteosRef.doc(req.params.id).get();
-
-        if (!snapshot.exists) {
-            return res.status(404).json({
-                message: 'Conteo no encontrado.',
-            });
-        }
-
-        return res.status(200).json({
-            conteo: mapConteo(snapshot),
-        });
-    } catch (error) {
-        return res.status(500).json({
-            message: error.message || 'No se pudo obtener el detalle del conteo.',
-        });
-    }
+        const result = await getRefs(req.user.uid).conteosRef.doc(documentId(req.params.id)).get();
+        if (!result.exists) throw new HttpError(404, 'Conteo no encontrado.');
+        return res.json({ conteo: mapConteo(result) });
+    } catch (error) { return respondError(res, error); }
 }
 
 async function listarAlertas(req, res) {
     try {
-        const refs = getRefs(req.user.uid);
-        const snapshot = await refs.alertasRef.orderBy('fecha_hora', 'desc').limit(30).get();
-
-        return res.status(200).json({
-            alertas: snapshot.docs.map(mapAlerta),
-        });
-    } catch (error) {
-        return res.status(500).json({
-            message: error.message || 'No se pudieron obtener las alertas.',
-        });
-    }
+        const result = await page(getRefs(req.user.uid).alertasRef, req.query, 'fecha_hora');
+        return res.json({ alertas: result.docs.map(mapAlerta), next_cursor: result.next_cursor });
+    } catch (error) { return respondError(res, error); }
 }
 
 async function marcarAlertaLeida(req, res) {
     try {
-        const refs = getRefs(req.user.uid);
-        const alertaRef = refs.alertasRef.doc(req.params.id);
-        const alertaSnap = await alertaRef.get();
-
-        if (!alertaSnap.exists) {
-            return res.status(404).json({
-                message: 'Alerta no encontrada.',
-            });
-        }
-
-        await alertaRef.set(
-            {
-                leida: true,
-            },
-            { merge: true },
-        );
-
-        const updated = await alertaRef.get();
-
-        return res.status(200).json({
-            message: 'Alerta actualizada correctamente.',
-            alerta: mapAlerta(updated),
+        const ref = getRefs(req.user.uid).alertasRef.doc(documentId(req.params.id));
+        await db.runTransaction(async tx => {
+            const result = await tx.get(ref);
+            if (!result.exists) throw new HttpError(404, 'Alerta no encontrada.');
+            tx.update(ref, { leida: true });
         });
-    } catch (error) {
-        return res.status(500).json({
-            message: error.message || 'No se pudo actualizar la alerta.',
-        });
-    }
+        return res.json({ alerta: mapAlerta(await ref.get()) });
+    } catch (error) { return respondError(res, error); }
 }
 
-module.exports = {
-    obtenerDashboard,
-    obtenerConfiguracion,
-    guardarConfiguracion,
-    obtenerDispositivo,
-    registrarConteoReal,
-    listarConteos,
-    obtenerConteoDetalle,
-    listarAlertas,
-    marcarAlertaLeida,
-};
+async function emitirComando(req, res) {
+    try {
+        const result = await iot.issue(req.user.uid, req.body);
+        return res.json({ frame: result.frame, request_id: result.request_id, session_id: result.session_id, command: result.command });
+    } catch (error) { return respondError(res, error); }
+}
+
+async function verificarRespuesta(req, res) {
+    try { return res.json(await iot.verify(req.user.uid, object(req.body).frame)); }
+    catch (error) { return respondError(res, error); }
+}
+
+module.exports = { obtenerDashboard, obtenerConfiguracion, guardarConfiguracion, obtenerDispositivo, registrarConteoReal, listarConteos, obtenerConteoDetalle, listarAlertas, marcarAlertaLeida, emitirComando, verificarRespuesta };
