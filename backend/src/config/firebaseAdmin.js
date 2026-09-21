@@ -1,65 +1,29 @@
 const fs = require('fs');
 const path = require('path');
-const admin = require('firebase-admin');
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env'), quiet: true });
 
-require('dotenv').config({
-    path: path.resolve(__dirname, '../../.env'),
-});
-
-let serviceAccount;
-const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-if (serviceAccountJson) {
-    try {
-        serviceAccount = JSON.parse(serviceAccountJson);
-    } catch (error) {
-        throw new Error(
-            'FIREBASE_SERVICE_ACCOUNT_JSON no es un JSON válido.',
-        );
+if (!getApps().length) {
+    const emulator = process.env.NODE_ENV === 'test'
+        && process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST;
+    if (emulator) {
+        initializeApp({ projectId: 'demo-bovisense' });
+    } else {
+        let account;
+        if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+            account = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+        } else {
+            const configured = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+            if (!configured) throw new Error('Firebase Admin credentials are not configured.');
+            const file = path.isAbsolute(configured) ? configured : path.resolve(__dirname, '../../', configured);
+            account = JSON.parse(fs.readFileSync(file, 'utf8'));
+        }
+        if (!account.project_id || !account.client_email || !account.private_key) throw new Error('Invalid Firebase Admin credentials.');
+        initializeApp({ credential: cert(account), projectId: account.project_id });
     }
-} else {
-    if (!serviceAccountPath) {
-        throw new Error(
-            'Define FIREBASE_SERVICE_ACCOUNT_JSON o GOOGLE_APPLICATION_CREDENTIALS en el entorno.',
-        );
-    }
-
-    const absoluteServiceAccountPath = path.isAbsolute(serviceAccountPath)
-        ? serviceAccountPath
-        : path.resolve(__dirname, '../../', serviceAccountPath);
-
-    if (!fs.existsSync(absoluteServiceAccountPath)) {
-        throw new Error(
-            `No existe el archivo de cuenta de servicio en: ${absoluteServiceAccountPath}`,
-        );
-    }
-
-    serviceAccount = require(absoluteServiceAccountPath);
 }
-
-if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
-    throw new Error(
-        'El archivo de cuenta de servicio de Firebase Admin está incompleto.',
-    );
-}
-
-if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        projectId: serviceAccount.project_id,
-    });
-}
-
-const auth = admin.auth();
-const db = admin.firestore();
-
-console.log('[FIREBASE ADMIN] projectId:', serviceAccount.project_id);
-console.log('[FIREBASE ADMIN] clientEmail:', serviceAccount.client_email);
-
-module.exports = {
-    admin,
-    auth,
-    db,
-    FieldValue: admin.firestore.FieldValue,
-};
+const auth = getAuth();
+const db = getFirestore();
+module.exports = { auth, db, FieldValue };

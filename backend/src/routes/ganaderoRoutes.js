@@ -6,6 +6,8 @@ const ganaderoController = require('../controllers/ganaderoController');
 const router = express.Router();
 
 router.use(requireRoles(['usuario', 'ganadero']));
+router.post('/iot/comandos', ganaderoController.emitirComando);
+router.post('/iot/respuestas', ganaderoController.verificarRespuesta);
 
 router.get('/dashboard', ganaderoController.obtenerDashboard);
 router.get('/configuracion', ganaderoController.obtenerConfiguracion);

@@ -21,11 +21,10 @@ async function verifyRequestToken(req, res) {
     }
 
     try {
-        return await auth.verifyIdToken(idToken);
+        return await auth.verifyIdToken(idToken, true);
     } catch (error) {
         console.error('[AUTH] Error verificando ID token:', {
             code: error.code,
-            message: error.message,
         });
 
         res.status(401).json({
@@ -41,13 +40,11 @@ async function loadUserProfile(uid, res) {
     } catch (error) {
         console.error('[FIRESTORE] Error cargando perfil de usuario:', {
             code: error.code,
-            message: error.message,
-            details: error.details,
         });
 
         res.status(500).json({
             message:
-                'No se pudo validar el perfil del usuario. Revisa las credenciales de Firebase Admin en el backend.',
+                'No se pudo validar la sesion. Intenta nuevamente.',
         });
         return null;
     }
@@ -75,7 +72,7 @@ function requireRoles(allowedRoles = []) {
         const rol = normalizeRole(userData.rol);
         const estado = normalizeRole(userData.estado);
 
-        if (estado !== 'activo') {
+        if (estado !== 'activo' || userData.operacion_pendiente) {
             return res.status(403).json({
                 message: 'El usuario está inactivo.',
             });
@@ -90,9 +87,9 @@ function requireRoles(allowedRoles = []) {
         }
 
         req.user = {
+            ...userData,
             uid: decodedToken.uid,
             email: decodedToken.email || '',
-            ...userData,
         };
 
         next();
