@@ -1,9 +1,9 @@
-import 'package:flutter/foundation.dart';
+import 'session_notifier.dart';
 
 import '../data/models/usuario_model.dart';
 import '../data/repositories/auth_repository.dart';
 
-class AuthViewModel extends ChangeNotifier {
+class AuthViewModel extends SessionNotifier {
   AuthViewModel(this._repository);
 
   final AuthRepository _repository;
@@ -36,18 +36,8 @@ class AuthViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> restoreSession() async {
-    try {
-      _currentUser = await _repository.restoreSession();
-    } catch (e) {
-      _errorMessage = e.toString().replaceFirst('Exception: ', '');
-    } finally {
-      _isInitializing = false;
-      notifyListeners();
-    }
-  }
-
   Future<bool> login({required String email, required String password}) async {
+    if (_isLoading || _isInitializing || disposed) return false;
     try {
       _setLoading(true);
       _errorMessage = null;

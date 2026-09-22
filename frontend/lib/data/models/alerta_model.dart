@@ -19,7 +19,8 @@ class AlertaModel {
     return AlertaModel(
       id: (json['id'] ?? '').toString(),
       mensaje: (json['mensaje'] ?? '').toString(),
-      fechaHora: jsonToDate(json['fecha_hora'] ?? json['fechaHora']) ?? DateTime.now(),
+      fechaHora:
+          jsonToDate(json['fecha_hora'] ?? json['fechaHora']) ?? DateTime.now(),
       leida: json['leida'] == true,
       nivel: (json['nivel'] ?? 'media').toString(),
     );

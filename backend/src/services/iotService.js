@@ -1,4 +1,5 @@
 const { COMMANDS, commandFrame, responseFrame } = require('./iotProtocol');
+const { FieldValue } = require('firebase-admin/firestore');
 const { HttpError, object, hexId, documentId, integer, text } = require('../utils/validation');
 
 function createIotService(db) {
@@ -91,6 +92,13 @@ function createIotService(db) {
                 if ((terminal || result.status === 'ERROR') && device.data()?.session_id === result.sessionId) {
                     tx.update(device.ref, { lease_until: 0 });
                 }
+            }
+            // El equipo informo que no tiene sesion activa (por ejemplo, se
+            // reinicio o el worker termino fuera de la app). Si no se libera
+            // aqui, el siguiente INICIARCONTEO se convierte en ESTADOCONTEO
+            // contra una sesion que ya no existe y la app queda atascada.
+            if (result.status === 'IDLE' && device.data()?.session_id) {
+                tx.update(device.ref, { lease_until: 0, session_id: FieldValue.delete() });
             }
             return { status: result.status, session: result.sessionId, count: result.count === null ? 'unknown' : String(result.count), device_id: deviceId(), proof: terminal ? raw : null };
         });

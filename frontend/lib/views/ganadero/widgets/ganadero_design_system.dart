@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/formatters.dart';
+import '../../../data/models/alerta_model.dart';
 import '../../../data/models/conteo_model.dart';
 
 class GanaderoColors {
@@ -286,8 +287,12 @@ class HistoryItem extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Lote principal',
+                  Text(
+                    // Antes decia siempre "Lote principal" (texto del mock): el
+                    // modelo no tiene lote, asi que se muestra el estado real.
+                    conteo.estadoConteo.trim().isEmpty
+                        ? 'Conteo'
+                        : _capitalize(conteo.estadoConteo),
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -341,6 +346,12 @@ class HistoryItem extends StatelessWidget {
   }
 }
 
+String _capitalize(String value) {
+  final text = value.trim();
+  if (text.isEmpty) return text;
+  return text[0].toUpperCase() + text.substring(1);
+}
+
 class StepFlowItem extends StatelessWidget {
   const StepFlowItem({
     super.key,
@@ -348,12 +359,14 @@ class StepFlowItem extends StatelessWidget {
     required this.description,
     required this.state,
     this.requiredAction,
+    this.onTap,
   });
 
   final String title;
   final String description;
   final StepStateType state;
   final String? requiredAction;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -372,7 +385,7 @@ class StepFlowItem extends StatelessWidget {
         borderColor = GanaderoColors.borderSoft;
     }
 
-    return Container(
+    final child = Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: GanaderoColors.card,
@@ -428,6 +441,17 @@ class StepFlowItem extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+
+    if (onTap == null) return child;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: child,
       ),
     );
   }
@@ -528,30 +552,45 @@ class AlertCard extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(16),
-        border: Border(
-          left: BorderSide(color: border, width: 3),
-          top: BorderSide(color: border.withValues(alpha: 0.2), width: 0.5),
-          right: BorderSide(color: border.withValues(alpha: 0.2), width: 0.5),
-          bottom: BorderSide(color: border.withValues(alpha: 0.2), width: 0.5),
-        ),
+        border: Border.all(color: border.withValues(alpha: 0.2), width: 0.5),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: text,
+          Container(
+            width: 3,
+            height: 48,
+            decoration: BoxDecoration(
+              color: border,
+              borderRadius: BorderRadius.circular(99),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(description, style: TextStyle(fontSize: 12, color: text)),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: text,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    description,
+                    style: TextStyle(fontSize: 12, color: text),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -914,6 +953,117 @@ class TechnicalDetails extends StatelessWidget {
                   )
                   .toList(),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tarjeta de una alerta (faltante o excedente).
+///
+/// Se usa en la pestaña Historial: el ganadero necesita ver qué pasó y poder
+/// marcarla como leída, no solo un contador de "alertas pendientes".
+class AlertItem extends StatelessWidget {
+  const AlertItem({super.key, required this.alerta, this.onMarkRead});
+
+  final AlertaModel alerta;
+  final VoidCallback? onMarkRead;
+
+  @override
+  Widget build(BuildContext context) {
+    final level = alerta.nivel.toLowerCase();
+    final Color color = switch (level) {
+      'alta' => GanaderoColors.redText,
+      'baja' => GanaderoColors.successText,
+      _ => GanaderoColors.amberText,
+    };
+    final String tipo = alerta.mensaje.toLowerCase().contains('excedente')
+        ? 'Excedente'
+        : 'Faltante';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: GanaderoColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: GanaderoColors.borderSoft, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  tipo,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: color,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: GanaderoColors.surfaceAlt,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Nivel ${alerta.nivel}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: GanaderoColors.muted,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              if (!alerta.leida)
+                const Text(
+                  'Nueva',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: GanaderoColors.primary,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            alerta.mensaje,
+            style: const TextStyle(
+              fontSize: 14,
+              color: GanaderoColors.textDark,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            formatDateTime(alerta.fechaHora),
+            style: const TextStyle(fontSize: 12, color: GanaderoColors.muted),
+          ),
+          if (!alerta.leida && onMarkRead != null) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onMarkRead,
+                style: TextButton.styleFrom(
+                  foregroundColor: GanaderoColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Marcar como leída'),
+              ),
+            ),
+          ],
         ],
       ),
     );

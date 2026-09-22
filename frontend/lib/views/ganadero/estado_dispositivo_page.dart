@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/services/esp32_ble_bridge_service.dart';
@@ -15,14 +16,13 @@ class EstadoDispositivoPage extends StatefulWidget {
 }
 
 class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
-  final TextEditingController _commandController = TextEditingController(
-    text: 'PING',
-  );
-
   bool _isSendingCommand = false;
   bool _isCheckingPrototypeStatus = false;
   bool _prototypeStatusSent = false;
   bool _isSavingResult = false;
+  bool _isStopping = false;
+  bool _isRefreshingCount = false;
+  bool _lastCountSaved = false;
   String? _bridgeError;
 
   @override
@@ -31,12 +31,6 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<GanaderoViewModel>().loadDashboard();
     });
-  }
-
-  @override
-  void dispose() {
-    _commandController.dispose();
-    super.dispose();
   }
 
   Future<void> _connectBridge(Esp32BleBridgeService bridge) async {
@@ -49,9 +43,26 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _bridgeError = 'No se pudo conectar con el equipo.';
+        _bridgeError = e.toString().replaceFirst('Exception: ', '');
       });
     }
+  }
+
+  /// Pide encender el Bluetooth y, si el usuario acepta, sigue con la conexion.
+  Future<void> _enableBluetoothAndConnect(Esp32BleBridgeService bridge) async {
+    final enabled = await bridge.requestBluetoothEnable();
+    if (!mounted) return;
+    if (enabled) {
+      await _connectBridge(bridge);
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Activa el Bluetooth desde los ajustes del teléfono y vuelve a intentar.',
+        ),
+      ),
+    );
   }
 
   Future<bool> _sendCommand(
@@ -64,7 +75,6 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     });
 
     try {
-      _commandController.text = command;
       await bridge.sendCommand(command);
       return true;
     } catch (e) {
@@ -92,7 +102,8 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     });
 
     final sent = await _sendCommand(bridge, 'ESTADO');
-    if (!mounted || !sent) {
+    if (!mounted) return;
+    if (!sent) {
       setState(() {
         _isCheckingPrototypeStatus = false;
       });
@@ -116,7 +127,56 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     Esp32BleBridgeService bridge,
     String command,
   ) async {
+    if (command == 'INICIARCONTEO') {
+      setState(() => _lastCountSaved = false);
+    }
     await _sendCommand(bridge, command);
+  }
+
+  /// Iniciar otro conteo descarta el resultado actual: se pide confirmacion
+  /// porque el resultado todavia no esta guardado.
+  Future<void> _confirmRepeatCount(Esp32BleBridgeService bridge) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('¿Iniciar un conteo nuevo?'),
+        content: const Text(
+          'Este resultado todavía no se guardó. Si inicias otro conteo, se pierde.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Iniciar nuevo'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _sendCountCommand(bridge, 'INICIARCONTEO');
+  }
+
+  /// Detener solo se marca como "Deteniendo..." cuando lo pide el usuario.
+  /// El sondeo automatico no debe cambiar el texto de los botones.
+  Future<void> _stopCounting(Esp32BleBridgeService bridge) async {
+    setState(() => _isStopping = true);
+    try {
+      await _sendCommand(bridge, 'DETENERCONTEO');
+    } finally {
+      if (mounted) setState(() => _isStopping = false);
+    }
+  }
+
+  Future<void> _refreshCount(Esp32BleBridgeService bridge) async {
+    setState(() => _isRefreshingCount = true);
+    try {
+      await _sendCommand(bridge, 'ESTADOCONTEO');
+    } finally {
+      if (mounted) setState(() => _isRefreshingCount = false);
+    }
   }
 
   Future<bool> _waitForJetsonStatus(
@@ -124,7 +184,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     DateTime requestedAt,
   ) async {
     final deadline = DateTime.now().add(const Duration(seconds: 10));
-    while (DateTime.now().isBefore(deadline)) {
+    while (mounted && DateTime.now().isBefore(deadline)) {
       final status = bridge.latestJetsonStatus;
       if (status != null && status.receivedAt.isAfter(requestedAt)) {
         return true;
@@ -136,9 +196,12 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
 
   Future<void> _saveCountResult(
     GanaderoViewModel vm,
+    Esp32BleBridgeService bridge,
     JetsonCountSnapshot? countStatus,
   ) async {
-    if (countStatus == null) return;
+    if (_isSavingResult || countStatus == null || !countStatus.finalResult) {
+      return;
+    }
 
     final countValue = int.tryParse(countStatus.count);
     if (countValue == null) {
@@ -155,7 +218,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     });
 
     final saved = await vm.registrarConteoReal(
-      cantidadDetectada: countValue,
+      proof: countStatus.proof!,
       sessionId: countStatus.sessionId,
     );
 
@@ -174,11 +237,20 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
       return;
     }
 
+    // Solo aqui el conteo quedo realmente guardado.
+    setState(() {
+      _lastCountSaved = true;
+      _bridgeError = null;
+    });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Resultado listo para guardar. Guardado con éxito.'),
+        content: Text('Conteo guardado. Ya puedes iniciar uno nuevo.'),
       ),
     );
+    // Limpia el resultado para que al volver a esta vista aparezca la
+    // secuencia de un conteo nuevo, no el resultado ya guardado.
+    bridge.resetCountSession();
+    vm.clearError();
     goToGanaderoTab(context, 3);
   }
 
@@ -191,6 +263,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     final connectionError = _hasConnectionError(bridge);
     final running = countStatus?.running == true || countStatus?.busy == true;
     final hasResult = countStatus?.finalResult == true;
+    final countFailed = countStatus?.failed == true;
 
     return Scaffold(
       appBar: GanaderoAppBar(
@@ -213,6 +286,8 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
             _buildRunningState(bridge, countStatus)
           else if (hasResult)
             _buildResultState(vm, bridge, countStatus)
+          else if (countFailed)
+            _buildCountErrorState(bridge, countStatus)
           else
             _buildFlowState(bridge, countStatus),
           if (_bridgeError != null) ...[
@@ -240,6 +315,40 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     Esp32BleBridgeService bridge,
     JetsonCountSnapshot? countStatus,
   ) {
+    final vm = context.read<GanaderoViewModel>();
+    // El backend rechaza INICIARCONTEO sin configuracion: se avisa antes de que
+    // el ganadero intente contar y reciba un error tecnico.
+    final needsConfig = vm.dashboard != null && vm.configuracion == null;
+    if (needsConfig) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const StatusBar(
+            status: SimpleStatusType.pending,
+            label: 'Falta configurar tu finca',
+            subtitle: 'Necesitamos el nombre y la cantidad esperada de ganado.',
+          ),
+          const SizedBox(height: 14),
+          const AlertCard(
+            title: 'Sin los datos de la finca no se puede contar',
+            description:
+                'El conteo compara los animales detectados con la cantidad esperada que registres aquí.',
+            status: SimpleStatusType.pending,
+          ),
+          const SizedBox(height: 12),
+          PrimaryButton(
+            label: 'Configurar finca',
+            onPressed: () => goToGanaderoTab(context, 1),
+          ),
+          const SizedBox(height: 12),
+          TechnicalDetails(
+            title: 'Detalles técnicos',
+            lines: _technicalLines(bridge),
+          ),
+        ],
+      );
+    }
+
     final connected = bridge.isConnected;
     final reviewed = _prototypeStatusSent || bridge.latestJetsonStatus != null;
     final started =
@@ -253,11 +362,26 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const StatusBar(
-          status: SimpleStatusType.pending,
-          label: 'Conecta el equipo',
-          subtitle: 'Acerca el teléfono al equipo y revisa estado.',
+        StatusBar(
+          status: _lastCountSaved
+              ? SimpleStatusType.ready
+              : SimpleStatusType.pending,
+          label: _lastCountSaved
+              ? 'Listo para un conteo nuevo'
+              : 'Conecta el equipo',
+          subtitle: _lastCountSaved
+              ? 'El conteo anterior ya se guardó en el historial.'
+              : 'Acerca el teléfono al equipo y revisa estado.',
         ),
+        if (_lastCountSaved) ...[
+          const SizedBox(height: 12),
+          const AlertCard(
+            title: 'Conteo guardado',
+            description:
+                'Revisa el historial para ver el detalle. Cuando estés listo, inicia otro conteo.',
+            status: SimpleStatusType.ready,
+          ),
+        ],
         const SizedBox(height: 14),
         const SectionTitle(text: 'Flujo de conexión y conteo'),
         StepFlowItem(
@@ -280,6 +404,9 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
               ? StepStateType.active
               : StepStateType.pending,
           requiredAction: step2Active ? 'Acción: revisar estado' : null,
+          onTap: step2Active && !_isCheckingPrototypeStatus
+              ? () => _sendPrototypeStatus(bridge)
+              : null,
         ),
         const SizedBox(height: 10),
         StepFlowItem(
@@ -293,6 +420,9 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
               ? StepStateType.active
               : StepStateType.pending,
           requiredAction: step3Active ? 'Acción: iniciar' : null,
+          onTap: step3Active && !_isSendingCommand
+              ? () => _sendCountCommand(bridge, 'INICIARCONTEO')
+              : null,
         ),
         const SizedBox(height: 10),
         StepFlowItem(
@@ -350,10 +480,21 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
         ),
         const SizedBox(height: 12),
         StopButton(
-          label: _isSendingCommand ? 'Deteniendo...' : 'Detener',
-          onPressed: _isSendingCommand
-              ? null
-              : () => _sendCountCommand(bridge, 'DETENERCONTEO'),
+          label: _isStopping ? 'Deteniendo...' : 'Detener',
+          onPressed: _isStopping ? null : () => _stopCounting(bridge),
+        ),
+        const SizedBox(height: 10),
+        OutlineActionButton(
+          label: _isRefreshingCount ? 'Consultando...' : 'Actualizar conteo',
+          onPressed: _isRefreshingCount ? null : () => _refreshCount(bridge),
+        ),
+        // Aviso fijo: deja claro que el refresco es automatico y que el cambio
+        // de textos de los botones solo ocurre si el usuario actua.
+        const SizedBox(height: 8),
+        const Text(
+          'El conteo se actualiza solo cada pocos segundos.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 11, color: GanaderoColors.muted),
         ),
         const SizedBox(height: 12),
         TechnicalDetails(
@@ -406,13 +547,66 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
           label: _isSavingResult ? 'Guardando...' : 'Guardar',
           onPressed: _isSavingResult
               ? null
-              : () => _saveCountResult(vm, countStatus),
+              : () => _saveCountResult(vm, bridge, countStatus),
           isLoading: _isSavingResult,
         ),
         const SizedBox(height: 10),
         OutlineActionButton(
-          label: 'Repetir',
-          onPressed: () => _sendCountCommand(bridge, 'INICIARCONTEO'),
+          label: 'Nuevo conteo',
+          onPressed: () => _confirmRepeatCount(bridge),
+        ),
+        const SizedBox(height: 12),
+        TechnicalDetails(
+          title: 'Detalles técnicos',
+          lines: _technicalLines(bridge),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCountErrorState(
+    Esp32BleBridgeService bridge,
+    JetsonCountSnapshot? countStatus,
+  ) {
+    final detail = countStatus?.detail.trim();
+    final reason = countStatus?.reason.trim();
+    final diagnostic = reason?.isNotEmpty == true
+        ? reason!
+        : detail?.isNotEmpty == true
+        ? detail!
+        : 'El equipo devolvió ERROR durante el conteo.';
+    final busy = _isSendingCommand || _isCheckingPrototypeStatus;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const StatusBar(
+          status: SimpleStatusType.error,
+          label: 'El conteo se detuvo',
+          subtitle: 'Revisa el equipo antes de iniciar otra sesión.',
+        ),
+        const SizedBox(height: 14),
+        AlertCard(
+          title: 'Falla del equipo',
+          description: diagnostic,
+          status: SimpleStatusType.error,
+        ),
+        const SizedBox(height: 12),
+        PrimaryButton(
+          label: busy ? 'Consultando...' : 'Consultar equipo',
+          onPressed: busy
+              ? null
+              // ESTADO no depende de la sesion: si la sesion murio al
+              // reiniciarse la Jetson, este es el comando que si responde.
+              : () => _sendPrototypeStatus(bridge),
+          isLoading: busy,
+        ),
+        const SizedBox(height: 10),
+        OutlineActionButton(
+          label: 'Iniciar nuevo conteo',
+          onPressed: busy
+              ? null
+              : () => _sendCountCommand(bridge, 'INICIARCONTEO'),
         ),
         const SizedBox(height: 12),
         TechnicalDetails(
@@ -424,12 +618,24 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
   }
 
   Widget _buildConnectionErrorState(Esp32BleBridgeService bridge) {
+    final isApiError = _isApiFailure(bridge);
+    final failure = isApiError ? Esp32BleBridgeFailure.none : bridge.failure;
+    final title = isApiError
+        ? 'No se pudo preparar el comando'
+        : _failureTitle(failure);
+    final message =
+        _bridgeError ??
+        bridge.errorMessage ??
+        'No se pudo conectar con el equipo.';
+    final subtitle = isApiError ? message : _failureSubtitle(bridge, failure);
+    final others = bridge.otherBluetoothDevices;
+
     return Column(
       children: [
-        const StatusBar(
+        StatusBar(
           status: SimpleStatusType.error,
-          label: 'No se pudo conectar con el equipo',
-          subtitle: 'Acerca el teléfono al equipo y vuelve a intentar.',
+          label: title,
+          subtitle: subtitle,
         ),
         const SizedBox(height: 16),
         Container(
@@ -440,49 +646,61 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: GanaderoColors.borderSoft, width: 0.5),
           ),
-          child: const Column(
+          child: Column(
             children: [
-              Icon(
+              const Icon(
                 Icons.warning_amber_rounded,
                 size: 44,
                 color: GanaderoColors.redText,
               ),
-              SizedBox(height: 10),
+              const SizedBox(height: 10),
               Text(
-                'No se pudo conectar con el equipo',
-                style: TextStyle(
+                title,
+                style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                   color: GanaderoColors.textDark,
                 ),
                 textAlign: TextAlign.center,
               ),
-              SizedBox(height: 6),
+              const SizedBox(height: 6),
               Text(
-                'Acerca el teléfono al equipo y vuelve a intentar.',
-                style: TextStyle(fontSize: 12, color: GanaderoColors.muted),
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: GanaderoColors.muted,
+                ),
                 textAlign: TextAlign.center,
               ),
+              if (others.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Bluetooth en uso por: ${others.take(4).join(', ')}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: GanaderoColors.muted,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 12),
-        PrimaryButton(
-          label: bridge.isBusy ? 'Conectando...' : 'Reintentar',
-          onPressed: bridge.isBusy ? null : () => _connectBridge(bridge),
-          isLoading: bridge.isBusy,
-        ),
+        _buildConnectPrimaryAction(bridge, failure),
         const SizedBox(height: 10),
         OutlineActionButton(
-          label: 'Ayuda',
+          label: _needsPhoneSettings(failure)
+              ? 'Abrir ajustes del teléfono'
+              : 'Ayuda',
           onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Verifica distancia, energía y Bluetooth activo.',
-                ),
-              ),
-            );
+            if (_needsPhoneSettings(failure)) {
+              openAppSettings();
+              return;
+            }
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(_connectionHelp(failure))));
           },
         ),
         const SizedBox(height: 12),
@@ -492,6 +710,101 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
         ),
       ],
     );
+  }
+
+  bool _isApiFailure(Esp32BleBridgeService bridge) {
+    final message = (_bridgeError ?? bridge.errorMessage ?? '').toLowerCase();
+    return message.contains('backend') || message.contains('api');
+  }
+
+  /// Bluetooth apagado o permisos denegados se resuelven en los ajustes.
+  bool _needsPhoneSettings(Esp32BleBridgeFailure failure) {
+    return failure == Esp32BleBridgeFailure.bluetoothOff ||
+        failure == Esp32BleBridgeFailure.permissionDenied;
+  }
+
+  String _failureTitle(Esp32BleBridgeFailure failure) {
+    switch (failure) {
+      case Esp32BleBridgeFailure.bluetoothOff:
+        return 'Activa el Bluetooth';
+      case Esp32BleBridgeFailure.bluetoothUnavailable:
+        return 'Bluetooth no disponible';
+      case Esp32BleBridgeFailure.permissionDenied:
+        return 'Falta el permiso de Bluetooth';
+      case Esp32BleBridgeFailure.deviceNotFound:
+        return 'No se encontró el equipo';
+      case Esp32BleBridgeFailure.bluetoothBusy:
+        return 'El Bluetooth está ocupado';
+      case Esp32BleBridgeFailure.connectionFailed:
+        return 'No se pudo conectar con el equipo';
+      case Esp32BleBridgeFailure.none:
+        return 'No se pudo conectar con el equipo';
+    }
+  }
+
+  String _failureSubtitle(
+    Esp32BleBridgeService bridge,
+    Esp32BleBridgeFailure failure,
+  ) {
+    if (failure == Esp32BleBridgeFailure.none) {
+      return bridge.errorMessage ??
+          'Acerca el teléfono al equipo y vuelve a intentar.';
+    }
+    return Esp32BleBridgeService.failureMessage(failure);
+  }
+
+  String _connectionHelp(Esp32BleBridgeFailure failure) {
+    switch (failure) {
+      case Esp32BleBridgeFailure.bluetoothOff:
+        return 'BoviSense necesita el Bluetooth del teléfono para hablar con el equipo de conteo.';
+      case Esp32BleBridgeFailure.permissionDenied:
+        return 'Ajustes del teléfono > Aplicaciones > BoviSense > Permisos > Dispositivos cercanos.';
+      case Esp32BleBridgeFailure.bluetoothBusy:
+        return 'Desconecta audífonos, parlantes o reloj, y apaga y enciende el Bluetooth.';
+      case Esp32BleBridgeFailure.deviceNotFound:
+        return 'Revisa que el equipo de conteo esté encendido, con batería y a pocos metros.';
+      case Esp32BleBridgeFailure.bluetoothUnavailable:
+        return 'Reinicia el Bluetooth del teléfono y espera unos segundos.';
+      case Esp32BleBridgeFailure.connectionFailed:
+        return 'Apaga y enciende el equipo de conteo y acércate más al puente.';
+      case Esp32BleBridgeFailure.none:
+        return 'Verifica distancia, energía y que el Bluetooth esté activo.';
+    }
+  }
+
+  Widget _buildConnectPrimaryAction(
+    Esp32BleBridgeService bridge,
+    Esp32BleBridgeFailure failure,
+  ) {
+    if (bridge.isBusy) {
+      return const PrimaryButton(
+        label: 'Conectando...',
+        onPressed: null,
+        isLoading: true,
+      );
+    }
+
+    switch (failure) {
+      case Esp32BleBridgeFailure.bluetoothOff:
+        return PrimaryButton(
+          label: 'Activar Bluetooth',
+          onPressed: () => _enableBluetoothAndConnect(bridge),
+        );
+      case Esp32BleBridgeFailure.permissionDenied:
+        return PrimaryButton(
+          label: 'Abrir ajustes',
+          onPressed: () => openAppSettings(),
+        );
+      case Esp32BleBridgeFailure.none:
+      case Esp32BleBridgeFailure.bluetoothUnavailable:
+      case Esp32BleBridgeFailure.deviceNotFound:
+      case Esp32BleBridgeFailure.bluetoothBusy:
+      case Esp32BleBridgeFailure.connectionFailed:
+        return PrimaryButton(
+          label: 'Reintentar',
+          onPressed: () => _connectBridge(bridge),
+        );
+    }
   }
 
   Widget _buildDynamicPrimaryAction(
@@ -516,7 +829,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
 
     if (!reviewed) {
       return PrimaryButton(
-        label: _isCheckingPrototypeStatus ? 'Revisando...' : 'Iniciar',
+        label: _isCheckingPrototypeStatus ? 'Revisando...' : 'Revisar estado',
         onPressed: _isCheckingPrototypeStatus
             ? null
             : () => _sendPrototypeStatus(bridge),
@@ -573,6 +886,11 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
 
   String _friendlyError(String rawMessage) {
     final lower = rawMessage.toLowerCase();
+    if (lower.contains('backend iot') ||
+        lower.contains('api_base_url') ||
+        lower.contains('ruta no encontrada')) {
+      return rawMessage.replaceFirst('Exception: ', '');
+    }
     if (lower.contains('timeout') || lower.contains('no lleg')) {
       return 'No se pudo conectar con el equipo. Acerca el teléfono al equipo y vuelve a intentar.';
     }

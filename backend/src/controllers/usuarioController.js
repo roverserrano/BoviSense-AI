@@ -37,8 +37,28 @@ function validarPayload(input) {
 
 async function listarUsuarios(req, res) {
     try {
-        const result = await page(db.collection('Usuarios'), req.query);
-        return res.json({ usuarios: result.docs.map(doc => normalizeUsuario(doc.id, doc.data())), next_cursor: result.next_cursor });
+        // Orden alfabetico por nombre: el administrador busca personas, no
+        // identificadores. El resumen solo se calcula en la primera pagina.
+        const result = await page(db.collection('Usuarios'), req.query, 'nombre', 'asc');
+        const body = {
+            usuarios: result.docs.map(doc => normalizeUsuario(doc.id, doc.data())),
+            next_cursor: result.next_cursor,
+        };
+        if (!req.query.cursor) {
+            const [total, activos, inactivos, administradores] = await Promise.all([
+                db.collection('Usuarios').count().get(),
+                db.collection('Usuarios').where('estado', '==', 'activo').count().get(),
+                db.collection('Usuarios').where('estado', '==', 'inactivo').count().get(),
+                db.collection('Usuarios').where('rol', '==', 'administrador').count().get(),
+            ]);
+            body.resumen = {
+                total: total.data().count,
+                activos: activos.data().count,
+                inactivos: inactivos.data().count,
+                administradores: administradores.data().count,
+            };
+        }
+        return res.json(body);
     } catch (error) { return respondError(res, error); }
 }
 

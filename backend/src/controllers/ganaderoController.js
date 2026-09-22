@@ -1,6 +1,6 @@
 const { db, FieldValue } = require('../config/firebaseAdmin');
+const { Timestamp } = require('firebase-admin/firestore');
 const { object, text, integer, documentId, hexId, HttpError, respondError } = require('../utils/validation');
-const { page } = require('../utils/pagination');
 const { createIotService } = require('../services/iotService');
 const iot = createIotService(db);
 
@@ -106,6 +106,119 @@ function mapAlerta(doc) {
     };
 }
 
+function logGanadero(req, message, data = {}) {
+    console.log('[GANADERO]', {
+        requestId: req.requestId,
+        uid: req.user?.uid,
+        step: message,
+        ...data,
+    });
+}
+
+function timestampMillis(value) {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (typeof value.toDate === 'function') return value.toDate().getTime();
+    if (value instanceof Date) return value.getTime();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+async function getConfigDoc(uid, refs) {
+    const current = await refs.configRef.get();
+    if (current.exists) return current;
+
+    const legacy = await db.collection('ConfiguracionSistema')
+        .where('uid', '==', uid)
+        .limit(1)
+        .get();
+    return legacy.docs[0] || current;
+}
+
+async function getRecentConteos(uid, refs, limit = 5) {
+    const [current, legacy] = await Promise.all([
+        refs.conteosRef.orderBy('fecha_hora_inicio', 'desc').limit(limit).get(),
+        db.collection('Conteos').where('uid', '==', uid).limit(100).get(),
+    ]);
+    const docsById = new Map();
+    for (const doc of [...legacy.docs, ...current.docs]) docsById.set(doc.id, doc);
+    return [...docsById.values()]
+        .sort((a, b) => timestampMillis(b.data()?.fecha_hora_inicio) - timestampMillis(a.data()?.fecha_hora_inicio))
+        .slice(0, limit);
+}
+
+async function getRecentAlertas(uid, refs, limit = 5) {
+    const [current, legacy] = await Promise.all([
+        refs.alertasRef.orderBy('fecha_hora', 'desc').limit(limit).get(),
+        db.collection('Alertas').where('uid', '==', uid).limit(100).get(),
+    ]);
+    const docsById = new Map();
+    for (const doc of [...legacy.docs, ...current.docs]) docsById.set(doc.id, doc);
+    return [...docsById.values()]
+        .sort((a, b) => timestampMillis(b.data()?.fecha_hora) - timestampMillis(a.data()?.fecha_hora))
+        .slice(0, limit);
+}
+
+function parseCursorDate(value) {
+    if (!value) return null;
+    const parsed = new Date(String(value));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// Lista mezclando la subcoleccion del usuario con la coleccion heredada y
+// devuelve un cursor real.
+//
+// Antes la primera pagina respondia siempre `next_cursor: null`, asi que la app
+// nunca pedia mas: el historial y las alertas quedaban cortados en 30 registros.
+// El cursor es la fecha del ultimo registro devuelto (en ISO) y se avanza con
+// `startAfter`, sin partir grupos que comparten la misma fecha.
+async function listOwnedMerged(uid, refs, name, sortField, cursorValue, limit = 30) {
+    const ref = name === 'Conteos' ? refs.conteosRef : refs.alertasRef;
+    const cursor = parseCursorDate(cursorValue);
+    let request = ref.orderBy(sortField, 'desc').limit(limit + 1);
+    if (cursor) request = request.startAfter(Timestamp.fromDate(cursor));
+
+    const [current, legacy] = await Promise.all([
+        request.get(),
+        db.collection(name).where('uid', '==', uid).limit(200).get(),
+    ]);
+
+    const docsById = new Map();
+    for (const doc of [...legacy.docs, ...current.docs]) {
+        const millis = timestampMillis(doc.data()?.[sortField]);
+        if (cursor && millis >= cursor.getTime()) continue;
+        docsById.set(doc.id, doc);
+    }
+    const docs = [...docsById.values()]
+        .sort((a, b) => timestampMillis(b.data()?.[sortField]) - timestampMillis(a.data()?.[sortField]));
+
+    // Nunca cortar un grupo con la misma fecha: si se cortara, el cursor
+    // (que excluye toda la fecha) perderia los registros restantes.
+    let take = Math.min(limit, docs.length);
+    if (take > 0 && docs.length > take) {
+        const boundary = timestampMillis(docs[take - 1].data()?.[sortField]);
+        while (take < docs.length && timestampMillis(docs[take].data()?.[sortField]) === boundary) take++;
+    }
+
+    const page = docs.slice(0, take);
+    const lastMillis = page.length ? timestampMillis(page[page.length - 1].data()?.[sortField]) : 0;
+    const hasMore = docs.length > take || current.docs.length > limit;
+    return {
+        docs: page,
+        next_cursor: hasMore && lastMillis > 0 ? new Date(lastMillis).toISOString() : null,
+    };
+}
+
+async function getOwnedDoc(uid, refs, name, id) {
+    const ref = name === 'Conteos' ? refs.conteosRef : refs.alertasRef;
+    const current = await ref.doc(id).get();
+    if (current.exists) return current;
+
+    const legacy = await db.collection(name).doc(id).get();
+    if (legacy.exists && legacy.data()?.uid === uid) return legacy;
+    return current;
+}
+
 async function getDispositivo(uid) {
     const { deviceRef } = getRefs(uid);
     const current = await deviceRef.get();
@@ -154,25 +267,44 @@ function buildAlertData(diferencia) {
 async function obtenerDashboard(req, res) {
     try {
         const refs = getRefs(req.user.uid);
-        const [config, device, counts, alerts, recent, recentAlerts] = await Promise.all([
-            refs.configRef.get(), getDispositivo(req.user.uid),
+        logGanadero(req, 'dashboard:start');
+        const [config, device, counts, alerts, legacyCounts, legacyAlerts, recent, recentAlerts] = await Promise.all([
+            getConfigDoc(req.user.uid, refs), getDispositivo(req.user.uid),
             refs.conteosRef.count().get(), refs.alertasRef.where('leida', '==', false).count().get(),
-            refs.conteosRef.orderBy('fecha_hora_inicio', 'desc').limit(5).get(),
-            refs.alertasRef.orderBy('fecha_hora', 'desc').limit(5).get(),
+            db.collection('Conteos').where('uid', '==', req.user.uid).count().get(),
+            db.collection('Alertas').where('uid', '==', req.user.uid).where('leida', '==', false).count().get(),
+            getRecentConteos(req.user.uid, refs),
+            getRecentAlertas(req.user.uid, refs),
         ]);
-        const conteos = recent.docs.map(mapConteo);
+        const conteos = recent.map(mapConteo);
+        const currentCount = counts.data().count;
+        const legacyCount = legacyCounts.data().count;
+        const currentPendingAlerts = alerts.data().count;
+        const legacyPendingAlerts = legacyAlerts.data().count;
+        logGanadero(req, 'dashboard:loaded', {
+            hasConfig: config.exists,
+            hasDevice: Boolean(device),
+            conteosActuales: currentCount,
+            conteosLegacy: legacyCount,
+            alertasActuales: currentPendingAlerts,
+            alertasLegacy: legacyPendingAlerts,
+            recientes: conteos.length,
+        });
         return res.json({
             configuracion: mapConfiguracion(config), dispositivo: device,
-            conteos_recientes: conteos, alertas_recientes: recentAlerts.docs.map(mapAlerta),
-            ultimo_conteo: conteos[0] || null, cantidad_conteos: counts.data().count,
-            alertas_pendientes: alerts.data().count, ultima_diferencia: conteos[0]?.diferencia || 0,
+            conteos_recientes: conteos, alertas_recientes: recentAlerts.map(mapAlerta),
+            ultimo_conteo: conteos[0] || null, cantidad_conteos: currentCount + legacyCount,
+            alertas_pendientes: currentPendingAlerts + legacyPendingAlerts, ultima_diferencia: conteos[0]?.diferencia || 0,
         });
     } catch (error) { return respondError(res, error); }
 }
 
 async function obtenerConfiguracion(req, res) {
     try {
-        return res.json({ configuracion: mapConfiguracion(await getRefs(req.user.uid).configRef.get()) });
+        const refs = getRefs(req.user.uid);
+        const config = await getConfigDoc(req.user.uid, refs);
+        logGanadero(req, 'configuracion:loaded', { hasConfig: config.exists });
+        return res.json({ configuracion: mapConfiguracion(config) });
     } catch (error) { return respondError(res, error); }
 }
 
@@ -238,14 +370,18 @@ async function registrarConteoReal(req, res) {
 
 async function listarConteos(req, res) {
     try {
-        const result = await page(getRefs(req.user.uid).conteosRef, req.query, 'fecha_hora_inicio');
+        const limit = integer(req.query.limit ?? 30, 'Limite', 1, 50);
+        const result = await listOwnedMerged(
+            req.user.uid, getRefs(req.user.uid), 'Conteos', 'fecha_hora_inicio', req.query.cursor, limit,
+        );
+        logGanadero(req, 'conteos:list', { total: result.docs.length, hasMore: Boolean(result.next_cursor) });
         return res.json({ conteos: result.docs.map(mapConteo), next_cursor: result.next_cursor });
     } catch (error) { return respondError(res, error); }
 }
 
 async function obtenerConteoDetalle(req, res) {
     try {
-        const result = await getRefs(req.user.uid).conteosRef.doc(documentId(req.params.id)).get();
+        const result = await getOwnedDoc(req.user.uid, getRefs(req.user.uid), 'Conteos', documentId(req.params.id));
         if (!result.exists) throw new HttpError(404, 'Conteo no encontrado.');
         return res.json({ conteo: mapConteo(result) });
     } catch (error) { return respondError(res, error); }
@@ -253,20 +389,25 @@ async function obtenerConteoDetalle(req, res) {
 
 async function listarAlertas(req, res) {
     try {
-        const result = await page(getRefs(req.user.uid).alertasRef, req.query, 'fecha_hora');
+        const limit = integer(req.query.limit ?? 30, 'Limite', 1, 50);
+        const result = await listOwnedMerged(
+            req.user.uid, getRefs(req.user.uid), 'Alertas', 'fecha_hora', req.query.cursor, limit,
+        );
+        logGanadero(req, 'alertas:list', { total: result.docs.length, hasMore: Boolean(result.next_cursor) });
         return res.json({ alertas: result.docs.map(mapAlerta), next_cursor: result.next_cursor });
     } catch (error) { return respondError(res, error); }
 }
 
 async function marcarAlertaLeida(req, res) {
     try {
-        const ref = getRefs(req.user.uid).alertasRef.doc(documentId(req.params.id));
-        await db.runTransaction(async tx => {
-            const result = await tx.get(ref);
-            if (!result.exists) throw new HttpError(404, 'Alerta no encontrada.');
-            tx.update(ref, { leida: true });
-        });
-        return res.json({ alerta: mapAlerta(await ref.get()) });
+        // Puede ser una alerta de la subcoleccion actual o de la coleccion
+        // heredada; getOwnedDoc comprueba la propiedad en ambos casos.
+        const found = await getOwnedDoc(
+            req.user.uid, getRefs(req.user.uid), 'Alertas', documentId(req.params.id),
+        );
+        if (!found.exists) throw new HttpError(404, 'Alerta no encontrada.');
+        await found.ref.update({ leida: true });
+        return res.json({ alerta: mapAlerta(await found.ref.get()) });
     } catch (error) { return respondError(res, error); }
 }
 

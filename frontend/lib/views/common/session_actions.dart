@@ -3,19 +3,34 @@ import 'package:provider/provider.dart';
 
 import '../../viewmodels/auth_view_model.dart';
 import '../auth/cambiar_contrasena_page.dart';
-import '../auth_gate.dart';
 
 class SessionActionsMenu extends StatelessWidget {
   const SessionActionsMenu({super.key});
 
   Future<void> _handleLogout(BuildContext context) async {
-    await context.read<AuthViewModel>().logout();
-    if (!context.mounted) return;
-
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AuthGate()),
-      (_) => false,
+    // Cerrar sesion obliga a volver a escribir las credenciales: se confirma.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('¿Cerrar sesión?'),
+        content: const Text(
+          'Tendrás que volver a ingresar tu correo y contraseña.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Cerrar sesión'),
+          ),
+        ],
+      ),
     );
+
+    if (confirmed != true || !context.mounted) return;
+    await context.read<AuthViewModel>().logout();
   }
 
   @override

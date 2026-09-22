@@ -22,7 +22,7 @@ class AdminSearchBar extends StatelessWidget {
           onChanged: onChanged,
           decoration: InputDecoration(
             hintText: 'Buscar usuario...',
-            helperText: 'Nombre, apellido o correo',
+            helperText: 'Nombre, apellido, correo o cédula',
             prefixIcon: const Icon(Icons.search_rounded),
             suffixIcon: controller.text.isNotEmpty
                 ? IconButton(

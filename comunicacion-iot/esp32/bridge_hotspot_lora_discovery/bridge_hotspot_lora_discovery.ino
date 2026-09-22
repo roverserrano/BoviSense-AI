@@ -7,13 +7,8 @@
   - Reenviar esos comandos por LoRa 433 MHz.
   - Escuchar respuestas o eventos LoRa y notificarlos a la app por BLE TX.
 
-  Protocolo:
-  - App -> BLE RX:          CMD:<contenido>
-  - ESP32 -> LoRa:          BRIDGE|<msgId>|<contenido>
-  - Nodo remoto -> LoRa:    RESP|<msgId>|<contenido>
-  - ESP32 -> BLE TX notify: STATUS:<contenido>
-                             LORA_RX:<contenido>
-                             ERROR:<contenido>
+  Protocolo autenticado C1/R1. BLE usa ~<trama>\n y LoRa la trama completa.
+  La clave solo reside en el backend y Jetson, nunca en este puente.
 */
 
 #if !defined(ARDUINO_ARCH_ESP32)
@@ -28,6 +23,8 @@
 #include <BLE2902.h>
 #include <esp_bt.h>
 #include <esp_gap_ble_api.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include "soc/rtc_cntl_reg.h"
 #include "soc/soc.h"
 
@@ -47,7 +44,7 @@ static const int LORA_CODING_RATE_DENOMINATOR = 5;
 
 static const size_t MAX_BLE_COMMAND_LENGTH = 180;
 static const size_t MAX_LORA_PAYLOAD_LENGTH = 220;
-static const uint32_t LORA_RESPONSE_TIMEOUT_MS = 8000;
+static const uint32_t LORA_RESPONSE_TIMEOUT_MS = 22000;
 static const uint32_t BLE_ADVERTISING_CHECK_INTERVAL_MS = 15000;
 static const uint16_t BLE_ADV_MIN_INTERVAL = 0x20;  // 20 ms
 static const uint16_t BLE_ADV_MAX_INTERVAL = 0x40;  // 40 ms
@@ -69,7 +66,7 @@ bool bleAdvertisingStarted = false;
 bool loraHeldInReset = false;
 
 uint32_t nextMsgId = 1;
-uint32_t pendingMsgId = 0;
+String pendingMsgId;
 uint32_t pendingSentAt = 0;
 uint32_t txCounter = 0;
 uint32_t rxCounter = 0;
@@ -77,8 +74,8 @@ uint32_t testCounter = 1;
 int lastRxRssi = 0;
 float lastRxSnr = 0.0;
 
-String pendingBleCommand;
-bool hasPendingBleCommand = false;
+struct CommandFrame { char text[181]; };
+QueueHandle_t commandQueue = nullptr;
 uint32_t lastBleAdvertisingCheck = 0;
 uint32_t nextLoRaInitAttemptAt = 0;
 
@@ -87,6 +84,7 @@ void trySetupLoRaIfDue();
 void holdLoRaInReset();
 void releaseLoRaReset();
 void stabilizePowerBeforeRadios();
+bool validRequestId(const String &id);
 
 String valueAfterPrefix(const String &value, const String &prefix) {
   if (!value.startsWith(prefix)) {
@@ -132,16 +130,35 @@ String protocolRemainder(const String &payload, int firstFieldIndex) {
 }
 
 void notifyApp(const String &message) {
-  Serial.print(F("[Bridge] Notificado a la app: "));
-  Serial.println(message);
-
-  if (!bleClientConnected || txCharacteristic == nullptr) {
-    Serial.println(F("[BLE] Sin cliente conectado; notificacion omitida"));
-    return;
+  if (!bleClientConnected || txCharacteristic == nullptr ||
+      !(message.startsWith("R1|") || message.startsWith("B0|"))) return;
+  const String framed = String("~") + message + "\n";
+  for (size_t offset = 0; offset < framed.length(); offset += 18) {
+    const String chunk = framed.substring(offset, offset + 18);
+    txCharacteristic->setValue(chunk.c_str());
+    txCharacteristic->notify();
+    delay(15);
   }
+}
 
-  txCharacteristic->setValue(message.c_str());
-  txCharacteristic->notify();
+String cleanBridgeReason(const String &reason) {
+  String safe;
+  safe.reserve(reason.length());
+  for (size_t i = 0; i < reason.length() && safe.length() < 48; i++) {
+    const char value = reason.charAt(i);
+    if ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+        (value >= '0' && value <= '9') || value == '_' || value == '-') {
+      safe += value;
+    } else {
+      safe += '_';
+    }
+  }
+  return safe.length() > 0 ? safe : "bridge_error";
+}
+
+void notifyBridgeError(const String &requestId, const String &reason) {
+  if (!validRequestId(requestId)) return;
+  notifyApp(String("B0|") + requestId + "|ERROR|" + cleanBridgeReason(reason));
 }
 
 bool isSafeTextPayload(const String &payload) {
@@ -155,21 +172,22 @@ bool isSafeTextPayload(const String &payload) {
 }
 
 bool sendLoRaMessage(const String &payload) {
+  const String requestId = protocolField(payload, 1);
   if (!loraReady) {
     Serial.println(F("[LoRa] ERROR: modulo no iniciado"));
-    notifyApp(F("ERROR:LoRa no iniciado"));
+    notifyBridgeError(requestId, F("lora_not_ready"));
     return false;
   }
 
   if (payload.length() == 0) {
     Serial.println(F("[LoRa] ERROR: payload vacio"));
-    notifyApp(F("ERROR:payload LoRa vacio"));
+    notifyBridgeError(requestId, F("empty_lora_payload"));
     return false;
   }
 
   if (payload.length() > MAX_LORA_PAYLOAD_LENGTH) {
     Serial.println(F("[LoRa] ERROR: payload demasiado largo"));
-    notifyApp(F("ERROR:payload LoRa demasiado largo"));
+    notifyBridgeError(requestId, F("lora_payload_too_long"));
     return false;
   }
 
@@ -181,13 +199,13 @@ bool sendLoRaMessage(const String &payload) {
 
   if (result == 0) {
     Serial.println(F("[LoRa] ERROR: fallo al finalizar paquete"));
-    notifyApp(F("ERROR:fallo al enviar por LoRa"));
+    notifyBridgeError(requestId, F("lora_send_failed"));
     return false;
   }
 
   txCounter++;
   Serial.print(F("[LoRa] Enviado: "));
-  Serial.println(payload);
+  Serial.println(F("[authenticated frame]"));
   return true;
 }
 
@@ -216,131 +234,53 @@ String buildStatusPayload(uint32_t msgId) {
   return payload;
 }
 
-void handleBleCommand(const String &rawCommand) {
-  String command = rawCommand;
-  command.trim();
+bool validRequestId(const String &id) {
+  if (id.length() != 32) return false;
+  for (size_t i = 0; i < id.length(); ++i)
+    if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return false;
+  return true;
+}
 
-  Serial.print(F("[BLE] Comando recibido: "));
-  Serial.println(command);
-
-  if (command.length() == 0) {
-    notifyApp(F("ERROR:comando BLE vacio"));
+void handleBleCommand(const String &command) {
+  if (command.length() > MAX_BLE_COMMAND_LENGTH || !command.startsWith("C1|") ||
+      !isSafeTextPayload(command)) return;
+  const String requestId = protocolField(command, 1);
+  if (!validRequestId(requestId)) return;
+  if (waitingForResponse && millis() - pendingSentAt < LORA_RESPONSE_TIMEOUT_MS) {
+    notifyBridgeError(requestId, F("bridge_busy_waiting_lora"));
     return;
   }
-
-  String content = valueAfterPrefix(command, F("CMD:"));
-  if (content.length() == 0) {
-    notifyApp(F("ERROR:formato esperado CMD:<contenido>"));
-    Serial.println(F("[BLE] ERROR: formato esperado CMD:<contenido>"));
-    return;
+  if (!loraReady) {
+    trySetupLoRaIfDue();
   }
-
-  if (content.length() > MAX_BLE_COMMAND_LENGTH) {
-    notifyApp(F("ERROR:comando demasiado largo"));
-    Serial.println(F("[BLE] ERROR: comando demasiado largo"));
-    return;
-  }
-
-  if (waitingForResponse &&
-      millis() - pendingSentAt < LORA_RESPONSE_TIMEOUT_MS) {
-    notifyApp(String(F("ERROR:busy esperando respuesta msgId=")) + String(pendingMsgId));
-    Serial.println(F("[Bridge] Ocupado esperando respuesta LoRa"));
-    return;
-  }
-
-  const bool isTestCommand =
-    content.equalsIgnoreCase(F("PING")) ||
-    content.equalsIgnoreCase(F("TEST")) ||
-    content.startsWith(F("TEST:"));
-  const bool isStatusCommand = content.equalsIgnoreCase(F("ESTADO"));
-
-  const uint32_t msgId = nextMsgId++;
-  String loraPayload;
-  if (isStatusCommand) {
-    loraPayload = buildStatusPayload(msgId);
-  } else if (isTestCommand) {
-    const String testContent = content.startsWith(F("TEST:"))
-      ? content.substring(5)
-      : content;
-    loraPayload = buildTestPayload(testContent);
-  } else {
-    loraPayload = String(F("BRIDGE|")) + String(msgId) + F("|") + content;
-  }
-
-  if (loraPayload.length() > MAX_LORA_PAYLOAD_LENGTH) {
-    notifyApp(F("ERROR:payload final excede limite LoRa"));
-    Serial.println(F("[Bridge] ERROR: payload final excede limite LoRa"));
-    return;
-  }
-
-  notifyApp(String(F("STATUS:comando recibido msgId=")) + String(msgId));
-
-  if (!sendLoRaMessage(loraPayload)) {
-    notifyApp(String(F("ERROR:fallo envio LoRa msgId=")) + String(msgId));
-    return;
-  }
-
-  if (isTestCommand) {
-    notifyApp(String(F("STATUS:LoRa enviado payload=")) + loraPayload);
-    return;
-  }
-
-  pendingMsgId = msgId;
+  if (!sendLoRaMessage(command)) return;
+  pendingMsgId = requestId;
   pendingSentAt = millis();
   waitingForResponse = true;
-  notifyApp(String(F("STATUS:enviado por LoRa msgId=")) + String(msgId));
-  if (isStatusCommand) {
-    notifyApp(String(F("STATUS:esperando estado Jetson msgId=")) + String(msgId));
-  }
 }
 
 void handleLoRaPayload(const String &payload) {
+  if (!waitingForResponse) {
+    Serial.println(F("[LoRa RX] descartado: no hay solicitud pendiente"));
+    return;
+  }
+  if (!payload.startsWith("R1|") || payload.length() > 200 || !isSafeTextPayload(payload)) {
+    Serial.println(F("[LoRa RX] descartado: formato R1 invalido"));
+    return;
+  }
+  if (protocolField(payload, 1) != pendingMsgId) {
+    Serial.println(F("[LoRa RX] descartado: id distinto de la solicitud pendiente"));
+    return;
+  }
   rxCounter++;
   lastRxRssi = LoRa.packetRssi();
   lastRxSnr = LoRa.packetSnr();
-
-  Serial.print(F("[LoRa] Recibido: "));
-  Serial.print(payload);
-  Serial.print(F(" | RSSI="));
+  Serial.print(F("[LoRa RX] R1 aceptado, RSSI="));
   Serial.print(lastRxRssi);
-  Serial.print(F(" dBm | SNR="));
-  Serial.println(lastRxSnr, 2);
-
-  if (payload.startsWith(F("RESP|"))) {
-    const String msgIdText = protocolField(payload, 1);
-    const String content = protocolRemainder(payload, 2);
-    const uint32_t msgId = (uint32_t)msgIdText.toInt();
-
-    if (msgId == 0 || content.length() == 0 || !isSafeTextPayload(content)) {
-      Serial.println(F("[LoRa] RESP corrupta o incompleta; se ignora para la app"));
-      notifyApp(F("STATUS:respuesta LoRa con interferencia"));
-      return;
-    }
-
-    if (waitingForResponse && msgId == pendingMsgId) {
-      waitingForResponse = false;
-      notifyApp(String(F("STATUS:respondido msgId=")) + String(msgId));
-    }
-
-    if (content.startsWith(F("JETSON_STATUS|"))) {
-      notifyApp(String(F("JETSON_STATUS:")) + protocolRemainder(content, 1));
-    } else if (content.startsWith(F("JS|"))) {
-      notifyApp(String(F("JETSON_STATUS:")) + protocolRemainder(content, 1));
-    } else if (content.startsWith(F("COUNT|"))) {
-      notifyApp(String(F("JETSON_COUNT:")) + protocolRemainder(content, 1));
-    }
-
-    notifyApp(String(F("LORA_RX:")) + content);
-    return;
-  }
-
-  if (!isSafeTextPayload(payload)) {
-    Serial.println(F("[LoRa] Payload no imprimible; se omite notificacion cruda"));
-    notifyApp(F("STATUS:paquete LoRa con interferencia"));
-    return;
-  }
-
-  notifyApp(String(F("LORA_RX:")) + payload);
+  Serial.print(F(" SNR="));
+  Serial.println(lastRxSnr);
+  notifyApp(payload);
+  waitingForResponse = false;
 }
 
 void pollLoRa() {
@@ -360,6 +300,13 @@ void pollLoRa() {
   }
   incoming.trim();
 
+  Serial.print(F("[LoRa RX] paquete len="));
+  Serial.print(packetSize);
+  Serial.print(F(" RSSI="));
+  Serial.print(LoRa.packetRssi());
+  Serial.print(F(" SNR="));
+  Serial.println(LoRa.packetSnr());
+
   if (incoming.length() == 0) {
     Serial.println(F("[LoRa] Paquete vacio ignorado"));
     return;
@@ -377,13 +324,10 @@ void checkLoRaTimeout() {
     return;
   }
 
-  const uint32_t timedOutMsgId = pendingMsgId;
   waitingForResponse = false;
-  pendingMsgId = 0;
-
-  Serial.print(F("[Bridge] Timeout esperando respuesta msgId="));
-  Serial.println(timedOutMsgId);
-  notifyApp(String(F("ERROR:timeout msgId=")) + String(timedOutMsgId));
+  notifyBridgeError(pendingMsgId, F("jetson_response_timeout"));
+  pendingMsgId = "";
+  Serial.println(F("[Bridge] Timeout esperando respuesta autenticada"));
 }
 
 class BridgeServerCallbacks : public BLEServerCallbacks {
@@ -403,9 +347,27 @@ class BridgeServerCallbacks : public BLEServerCallbacks {
 };
 
 class BridgeRxCallbacks : public BLECharacteristicCallbacks {
+  char buffer[181] = {};
+  size_t length = 0;
+  bool receiving = false;
+  uint32_t lastByteAt = 0;
   void onWrite(BLECharacteristic *characteristic) {
-    pendingBleCommand = String(characteristic->getValue().c_str());
-    hasPendingBleCommand = true;
+    const auto value = characteristic->getValue();
+    if (millis() - lastByteAt > 5000) { receiving = false; length = 0; }
+    lastByteAt = millis();
+    for (size_t i = 0; i < value.length(); ++i) {
+      const char c = value[i];
+      if (c == '~') { receiving = true; length = 0; }
+      else if (receiving && c == '\n') {
+        buffer[length] = 0;
+        CommandFrame command = {};
+        memcpy(command.text, buffer, length + 1);
+        if (commandQueue != nullptr) xQueueSend(commandQueue, &command, 0);
+        receiving = false; length = 0;
+      } else if (receiving && c >= 32 && c <= 126 && length < 180) {
+        buffer[length++] = c;
+      } else { receiving = false; length = 0; }
+    }
   }
 };
 
@@ -579,6 +541,8 @@ void setup() {
   holdLoRaInReset();
   stabilizePowerBeforeRadios();
   Serial.println(F("[Boot] Inicializando BLE..."));
+  commandQueue = xQueueCreate(4, sizeof(CommandFrame));
+  if (commandQueue == nullptr) { Serial.println(F("Command queue allocation failed")); return; }
   setupBLE();
   Serial.print(F("[Boot] LoRa diferido. Primer intento en ms: "));
   Serial.println(LORA_INIT_DELAY_MS);
@@ -586,11 +550,9 @@ void setup() {
 }
 
 void loop() {
-  if (hasPendingBleCommand) {
-    const String command = pendingBleCommand;
-    pendingBleCommand = "";
-    hasPendingBleCommand = false;
-    handleBleCommand(command);
+  CommandFrame command;
+  if (commandQueue != nullptr && xQueueReceive(commandQueue, &command, 0) == pdTRUE) {
+    handleBleCommand(String(command.text));
   }
 
   if (Serial.available()) {

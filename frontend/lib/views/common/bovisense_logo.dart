@@ -24,6 +24,14 @@ class BoviSenseLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!showText) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: _LogoImage(size: size, fit: fit, alignment: alignment),
+      );
+    }
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -105,10 +113,13 @@ class _LogoImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cacheSize = (size * MediaQuery.devicePixelRatioOf(context)).round();
     return Image.asset(
       BoviSenseBrand.logoAssetPath,
       fit: fit,
       alignment: alignment,
+      cacheWidth: cacheSize,
+      cacheHeight: cacheSize,
       filterQuality: FilterQuality.high,
       errorBuilder: (_, __, ___) {
         return Container(

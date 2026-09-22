@@ -1,4 +1,11 @@
-# Analisis Comparativo de Codigos de Referencia
+# Analisis Comparativo de Codigos de Referencia (historico)
+
+> **Estado: historico.** Este documento analiza los sketches ESP8266/NodeMCU que
+> sirvieron de referencia al inicio del proyecto. No describe el sistema
+> vigente: hoy el puente es un ESP32 BLE que retransmite tramas opacas `C1`/`R1`
+> y el firmware ESP8266 ya no forma parte del repositorio. Para el
+> comportamiento actual vea `arquitectura-comunicacion.md`,
+> `flujo-comandos.md` y `protocolo-lora.md`.
 
 ## Similitudes utiles
 
@@ -39,8 +46,8 @@ Person 1 y Person 2 tienen la misma estructura:
 
 ## Elementos reemplazados
 
-- NodeMCU/ESP8266 se reemplaza por ESP32 en `bridge_wifi_lora.ino`.
+- NodeMCU/ESP8266 se reemplaza por ESP32 en
+  `comunicacion-iot/esp32/bridge_hotspot_lora_discovery/`.
 - La logica del receptor remoto se reemplaza por Python en Jetson.
-- Texto libre se reemplaza por JSON validado y lista blanca.
+- Texto libre y JSON se reemplazan por tramas autenticadas `C1`/`R1`.
 - Callbacks inseguros se reemplazan por manejo defensivo.
-

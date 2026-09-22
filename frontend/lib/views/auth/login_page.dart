@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/theme/app_theme.dart';
 import '../../viewmodels/auth_view_model.dart';
 import '../common/bovisense_logo.dart';
@@ -43,10 +45,9 @@ class _LoginPageState extends State<LoginPage> {
 
     if (!mounted) return;
 
-    if (!ok && vm.errorMessage != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(vm.errorMessage!)));
+    if (ok) {
+      // Guarda las credenciales en el gestor de contrasenas del telefono.
+      TextInput.finishAutofillContext();
     }
   }
 
@@ -69,7 +70,14 @@ class _LoginPageState extends State<LoginPage> {
     Uri uri, {
     LaunchMode mode = LaunchMode.externalNonBrowserApplication,
   }) async {
-    final ok = await launchUrl(uri, mode: mode);
+    // En Android, si la app destino (WhatsApp, telefono) no existe, launchUrl
+    // puede lanzar PlatformException en lugar de devolver false.
+    var ok = false;
+    try {
+      ok = await launchUrl(uri, mode: mode);
+    } catch (_) {
+      ok = false;
+    }
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -83,9 +91,6 @@ class _LoginPageState extends State<LoginPage> {
     showDialog<void>(
       context: context,
       builder: (dialogContext) {
-        const supportPhone = '71338567';
-        const supportWhatsapp = '+59171338567';
-
         return AlertDialog(
           insetPadding: const EdgeInsets.symmetric(
             horizontal: 20,
@@ -107,28 +112,26 @@ class _LoginPageState extends State<LoginPage> {
                   color: GanaderoColors.textSecondary,
                 ),
               ),
-              
+
               const SizedBox(height: 12),
               _SupportInfoBlock(
                 label: 'Teléfono',
-                value: supportPhone,
+                value: AppConfig.supportPhone,
                 icon: Icons.phone_outlined,
                 tappable: true,
                 onTap: () => _openExternalUri(
-                  Uri(scheme: 'tel', path: supportPhone),
+                  Uri(scheme: 'tel', path: AppConfig.supportPhone),
                   mode: LaunchMode.platformDefault,
                 ),
               ),
               const SizedBox(height: 12),
               _SupportInfoBlock(
                 label: 'WhatsApp',
-                value: supportWhatsapp,
+                value: AppConfig.supportWhatsapp,
                 icon: Icons.chat_rounded,
                 tappable: true,
                 onTap: () => _openExternalUri(
-                  Uri.parse(
-                    'whatsapp://send?phone=59171338567&text=Hola%2C%20necesito%20ayuda%20con%20BoviSense%20AI.',
-                  ),
+                  AppConfig.supportWhatsappUri,
                   mode: LaunchMode.externalNonBrowserApplication,
                 ),
               ),
@@ -190,6 +193,8 @@ class _LoginPageState extends State<LoginPage> {
                               passwordFocusNode: _passwordFocusNode,
                               obscureText: _obscureText,
                               isLoading: vm.isLoading,
+                              errorMessage: vm.errorMessage,
+                              onFieldEdited: vm.clearError,
                               onToggleObscureText: () {
                                 setState(() {
                                   _obscureText = !_obscureText;
@@ -229,28 +234,28 @@ class _HeroBrand extends StatelessWidget {
     return Column(
       children: [
         Container(
-          width: 142,
-          height: 142,
+          width: 148,
+          height: 148,
+          padding: const EdgeInsets.all(7),
           decoration: BoxDecoration(
-            color: GanaderoColors.surfaceAlt,
+            color: const Color(0xFFF8F6F1),
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
-                blurRadius: 18,
+                color: Colors.black.withValues(alpha: 0.10),
+                blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
             ],
             border: Border.all(color: GanaderoColors.borderSoft, width: 1),
           ),
           child: const ClipOval(
-            child: SizedBox(
-              width: 142,
-              height: 142,
+            child: ColoredBox(
+              color: Colors.white,
               child: BoviSenseLogo(
-                size: 142,
+                size: 134,
                 fit: BoxFit.cover,
-                alignment: Alignment(0, -0.92),
+                alignment: Alignment(0, -0.82),
               ),
             ),
           ),
@@ -294,6 +299,8 @@ class _LoginCard extends StatelessWidget {
     required this.passwordFocusNode,
     required this.obscureText,
     required this.isLoading,
+    required this.errorMessage,
+    required this.onFieldEdited,
     required this.onToggleObscureText,
     required this.onPasswordRecovery,
     required this.onLogin,
@@ -305,6 +312,8 @@ class _LoginCard extends StatelessWidget {
   final FocusNode passwordFocusNode;
   final bool obscureText;
   final bool isLoading;
+  final String? errorMessage;
+  final VoidCallback onFieldEdited;
   final VoidCallback onToggleObscureText;
   final Future<void> Function() onPasswordRecovery;
   final Future<void> Function() onLogin;
@@ -325,136 +334,133 @@ class _LoginCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -24,
-            right: -20,
-            child: _GlowOrb(size: 92, color: const Color(0x184A6741)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
-            child: AutofillGroup(
-              child: Form(
-                key: formKey,
-                autovalidateMode: AutovalidateMode.onUserInteraction,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text(
-                      'Bienvenido',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w700,
-                        color: GanaderoColors.textDark,
-                        height: 1.05,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Ingresa tus credenciales para continuar',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 15,
-                        height: 1.45,
-                        color: GanaderoColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    _LoginTextField(
-                      controller: correoController,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      autofillHints: const [
-                        AutofillHints.username,
-                        AutofillHints.email,
-                      ],
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      hintText: 'Correo electrónico',
-                      prefixIcon: Icons.alternate_email_rounded,
-                      onFieldSubmitted: (_) {
-                        FocusScope.of(context).requestFocus(passwordFocusNode);
-                      },
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Ingresa tu correo';
-                        }
-                        final regex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
-                        if (!regex.hasMatch(value.trim())) {
-                          return 'Correo inválido';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    _LoginTextField(
-                      controller: passwordController,
-                      focusNode: passwordFocusNode,
-                      obscureText: obscureText,
-                      obscuringCharacter: '•',
-                      textInputAction: TextInputAction.done,
-                      autofillHints: const [AutofillHints.password],
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      hintText: 'Contraseña',
-                      prefixIcon: Icons.lock_rounded,
-                      suffixIcon: IconButton(
-                        onPressed: onToggleObscureText,
-                        icon: Icon(
-                          obscureText
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
-                        color: GanaderoColors.muted,
-                      ),
-                      onFieldSubmitted: (_) {
-                        if (!isLoading) {
-                          onLogin();
-                        }
-                      },
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Ingresa tu contraseña';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: isLoading
-                            ? null
-                            : () {
-                                onPasswordRecovery();
-                              },
-                        style: TextButton.styleFrom(
-                          foregroundColor: GanaderoColors.primary,
-                          padding: EdgeInsets.zero,
-                          minimumSize: const Size(0, 36),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text('¿Olvidaste tu contraseña?'),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _LoginActionButton(
-                      label: isLoading ? 'espere por favor' : 'Iniciar sesión',
-                      isLoading: isLoading,
-                      onPressed: isLoading
-                          ? null
-                          : () {
-                              onLogin();
-                            },
-                    ),
-                  ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
+        child: AutofillGroup(
+          child: Form(
+            key: formKey,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Bienvenido',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w700,
+                    color: GanaderoColors.textDark,
+                    height: 1.05,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Ingresa tus credenciales para continuar',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.45,
+                    color: GanaderoColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _LoginTextField(
+                  controller: correoController,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [
+                    AutofillHints.username,
+                    AutofillHints.email,
+                  ],
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  hintText: 'Correo electrónico',
+                  prefixIcon: Icons.alternate_email_rounded,
+                  onChanged: (_) => onFieldEdited(),
+                  onFieldSubmitted: (_) {
+                    FocusScope.of(context).requestFocus(passwordFocusNode);
+                  },
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Ingresa tu correo';
+                    }
+                    final regex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
+                    if (!regex.hasMatch(value.trim())) {
+                      return 'Correo inválido';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 14),
+                _LoginTextField(
+                  controller: passwordController,
+                  focusNode: passwordFocusNode,
+                  obscureText: obscureText,
+                  obscuringCharacter: '•',
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.password],
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  hintText: 'Contraseña',
+                  prefixIcon: Icons.lock_rounded,
+                  onChanged: (_) => onFieldEdited(),
+                  suffixIcon: IconButton(
+                    onPressed: onToggleObscureText,
+                    icon: Icon(
+                      obscureText
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                    color: GanaderoColors.muted,
+                  ),
+                  onFieldSubmitted: (_) {
+                    if (!isLoading) {
+                      onLogin();
+                    }
+                  },
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Ingresa tu contraseña';
+                    }
+                    return null;
+                  },
+                ),
+                if (errorMessage != null && !isLoading) ...[
+                  const SizedBox(height: 14),
+                  _LoginErrorBox(message: errorMessage!),
+                ],
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: isLoading
+                        ? null
+                        : () {
+                            onPasswordRecovery();
+                          },
+                    style: TextButton.styleFrom(
+                      foregroundColor: GanaderoColors.primary,
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('¿Olvidaste tu contraseña?'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _LoginActionButton(
+                  label: 'Iniciar sesión',
+                  isLoading: isLoading,
+                  onPressed: isLoading
+                      ? null
+                      : () {
+                          onLogin();
+                        },
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -474,6 +480,7 @@ class _LoginTextField extends StatelessWidget {
     this.autofillHints,
     this.autocorrect = true,
     this.enableSuggestions = true,
+    this.onChanged,
     this.onFieldSubmitted,
     this.validator,
   });
@@ -490,6 +497,7 @@ class _LoginTextField extends StatelessWidget {
   final Iterable<String>? autofillHints;
   final bool autocorrect;
   final bool enableSuggestions;
+  final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onFieldSubmitted;
   final FormFieldValidator<String>? validator;
 
@@ -506,6 +514,7 @@ class _LoginTextField extends StatelessWidget {
       autocorrect: autocorrect,
       enableSuggestions: enableSuggestions,
       validator: validator,
+      onChanged: onChanged,
       onFieldSubmitted: onFieldSubmitted,
       style: const TextStyle(
         fontSize: 16,
@@ -577,14 +586,18 @@ class _LoginActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: GanaderoColors.primary.withValues(alpha: 0.28),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            color: GanaderoColors.primary.withValues(
+              alpha: isLoading ? 0.18 : 0.28,
+            ),
+            blurRadius: isLoading ? 12 : 18,
+            offset: Offset(0, isLoading ? 5 : 8),
           ),
         ],
       ),
@@ -602,7 +615,18 @@ class _LoginActionButton extends StatelessWidget {
         ),
         onPressed: isLoading ? null : onPressed,
         child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
+                child: child,
+              ),
+            );
+          },
           child: isLoading
               ? const Row(
                   key: ValueKey('loading'),
@@ -614,15 +638,17 @@ class _LoginActionButton extends StatelessWidget {
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        color: GanaderoColors.primary,
+                        color: GanaderoColors.buttonText,
+                        backgroundColor: Color(0x334A6741),
                       ),
                     ),
                     SizedBox(width: 12),
                     Text(
-                      'espere por favor',
+                      'Ingresando...',
                       style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.2,
                         color: GanaderoColors.buttonText,
                       ),
                     ),
@@ -645,24 +671,6 @@ class _LoginActionButton extends StatelessWidget {
                   ],
                 ),
         ),
-      ),
-    );
-  }
-}
-
-class _GlowOrb extends StatelessWidget {
-  const _GlowOrb({required this.size, required this.color});
-
-  final double size;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
       ),
     );
   }
@@ -745,6 +753,50 @@ class _SupportInfoBlock extends StatelessWidget {
           ),
           child: content,
         ),
+      ),
+    );
+  }
+}
+
+/// Error de inicio de sesion dentro de la tarjeta.
+///
+/// Antes solo se avisaba con un SnackBar, que desaparece y puede quedar tapado
+/// por el teclado; aqui el mensaje queda visible hasta que el usuario corrige.
+class _LoginErrorBox extends StatelessWidget {
+  const _LoginErrorBox({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFCEBEB),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE3B4AE), width: 1),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            size: 18,
+            color: Color(0xFF9C3B31),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.35,
+                color: Color(0xFF7A2820),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -31,3 +31,22 @@ test('authenticated frames reject manipulation and foreign keys', () => {
     assert.throws(() => responseFrame(frame.replace('|27|', '|28|'), key));
     assert.throws(() => responseFrame(frame, Buffer.alloc(32, 18)));
 });
+
+test('protocol frames reject malformed, expired and unknown values', () => {
+    assert.throws(() => commandFrame({ requestId: id, sessionId: '-', expires: 0, command: 'H' }, key));
+    assert.throws(() => commandFrame({ requestId: id, sessionId: '-', expires: 2000000060, command: 'Z' }, key));
+    assert.throws(() => commandFrame({ requestId: 'A'.repeat(32), sessionId: '-', expires: 2000000060, command: 'H' }, key));
+
+    const signed = (payload) => `${payload}|${sign(payload, key)}`;
+    const partial = signed(`R1|${id}|${id}|RUNNING|-|2000000000|-`);
+    const parsed = responseFrame(partial, key);
+    assert.equal(parsed.count, null);
+    assert.equal(parsed.completedAt, null);
+
+    assert.throws(() => responseFrame(signed(`R1|${id}|${id}|BROKEN|1|2000000000|-`), key));
+    assert.throws(() => responseFrame(signed(`R1|${id}|${id}|STOPPED|-1|2000000000|1999999999`), key));
+    assert.throws(() => responseFrame(signed(`R1|${id}|${id}|RESULT|27|2000000000`), key));
+    assert.throws(() => responseFrame(`R1|${id}|${id}|RESULT|27|2000000000|1999999999|${'z'.repeat(32)}`, key));
+    assert.throws(() => responseFrame(`R1|${id}|${id}|RESULT|27|2000000000|-|${sign(`R1|${id}|${id}|RESULT|27|2000000000|-`, key)}`.padEnd(220, 'x'), key));
+    assert.throws(() => responseFrame(`R1|${id}|${id}|RESULT|27|2000\u00070000|-|${'0'.repeat(32)}`, key));
+});

@@ -21,8 +21,23 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final vm = context.read<GanaderoViewModel>();
       await vm.loadHistorial();
+      await vm.loadAlertas();
       await vm.loadDashboard();
     });
+  }
+
+  Future<void> _markAlertRead(GanaderoViewModel vm, String alertaId) async {
+    final ok = await vm.marcarAlertaLeida(alertaId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Alerta marcada como leída.'
+              : (vm.errorMessage ?? 'No se pudo actualizar la alerta.'),
+        ),
+      ),
+    );
   }
 
   @override
@@ -34,6 +49,15 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
           a.fechaHoraInicio ?? DateTime(1900),
         ),
       );
+    // Primero lo que el ganadero tiene que atender.
+    final alertas = [...vm.alertas]
+      ..sort((a, b) {
+        if (a.leida != b.leida) return a.leida ? 1 : -1;
+        return b.fechaHora.compareTo(a.fechaHora);
+      });
+    final alertasPendientes =
+        vm.dashboard?.alertasPendientes ??
+        alertas.where((alerta) => !alerta.leida).length;
 
     return Scaffold(
       appBar: GanaderoAppBar(
@@ -50,11 +74,58 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
       body: RefreshIndicator(
         onRefresh: () async {
           await vm.loadHistorial();
+          await vm.loadAlertas();
           await vm.loadDashboard();
         },
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const SectionTitle(text: 'Alertas'),
+            if (vm.isLoadingAlertas && alertas.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else if (alertas.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: GanaderoColors.card,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: GanaderoColors.borderSoft,
+                    width: 0.5,
+                  ),
+                ),
+                child: const Text(
+                  'No tienes alertas. Tus conteos coinciden con lo esperado.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: GanaderoColors.textSecondary,
+                  ),
+                ),
+              )
+            else
+              ...alertas.map(
+                (alerta) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: AlertItem(
+                    alerta: alerta,
+                    onMarkRead: () => _markAlertRead(vm, alerta.id),
+                  ),
+                ),
+              ),
+            if (vm.hasMoreAlertas)
+              TextButton.icon(
+                onPressed: vm.isLoadingAlertas
+                    ? null
+                    : () => vm.loadAlertas(more: true),
+                icon: const Icon(Icons.expand_more),
+                label: Text(
+                  vm.isLoadingAlertas ? 'Cargando...' : 'Cargar más alertas',
+                ),
+              ),
+            const SizedBox(height: 16),
             const SectionTitle(text: 'Conteos'),
             if (vm.isLoadingHistorial && sorted.isEmpty)
               const Padding(
@@ -87,14 +158,28 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                   child: HistoryItem(
                     conteo: conteo,
                     onTap: () {
+                      final ganaderoVm = context.read<GanaderoViewModel>();
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) =>
-                              ConteoDetallePage(conteoId: conteo.id),
+                              ChangeNotifierProvider<GanaderoViewModel>.value(
+                                value: ganaderoVm,
+                                child: ConteoDetallePage(conteoId: conteo.id),
+                              ),
                         ),
                       );
                     },
                   ),
+                ),
+              ),
+            if (vm.hasMoreHistorial)
+              TextButton.icon(
+                onPressed: vm.isLoadingHistorial
+                    ? null
+                    : () => vm.loadHistorial(more: true),
+                icon: const Icon(Icons.expand_more),
+                label: Text(
+                  vm.isLoadingHistorial ? 'Cargando...' : 'Cargar mas conteos',
                 ),
               ),
             const SizedBox(height: 8),
@@ -112,7 +197,7 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Total de conteos: ${sorted.length}',
+                      'Total de conteos: ${vm.dashboard?.cantidadConteos ?? sorted.length}',
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
@@ -121,7 +206,7 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                     ),
                   ),
                   Text(
-                    'Alertas: ${vm.dashboard?.alertasPendientes ?? 0}',
+                    'Alertas: $alertasPendientes',
                     style: const TextStyle(
                       fontSize: 12,
                       color: GanaderoColors.muted,

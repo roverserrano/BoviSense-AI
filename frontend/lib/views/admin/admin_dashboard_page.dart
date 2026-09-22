@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/models/usuario_model.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
 import '../../viewmodels/auth_view_model.dart';
+import '../common/exit_confirm.dart';
 import '../common/session_actions.dart';
 import 'usuario_form_page.dart';
 import 'widgets/admin_empty_state.dart';
@@ -41,8 +44,14 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   }
 
   Future<void> _openForm([UsuarioModel? usuario]) async {
+    final adminVm = context.read<AdminUsuariosViewModel>();
     final saved = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => UsuarioFormPage(usuario: usuario)),
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider<AdminUsuariosViewModel>.value(
+          value: adminVm,
+          child: UsuarioFormPage(usuario: usuario),
+        ),
+      ),
     );
 
     if (!mounted) return;
@@ -52,7 +61,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         SnackBar(
           content: Text(
             usuario == null
-                ? 'Usuario registrado correctamente.'
+                ? (context.read<AdminUsuariosViewModel>().creationNotice ??
+                      'Usuario registrado correctamente.')
                 : 'Usuario actualizado correctamente.',
           ),
         ),
@@ -91,7 +101,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       final byQuery =
           query.isEmpty ||
           usuario.nombreCompleto.toLowerCase().contains(query) ||
-          usuario.correo.toLowerCase().contains(query);
+          usuario.correo.toLowerCase().contains(query) ||
+          usuario.cedulaIdentidad.toString().contains(query);
 
       final rol = usuario.rol.toLowerCase();
       final estado = usuario.estado.toLowerCase();
@@ -107,6 +118,12 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     }).toList();
   }
 
+  /// La busqueda es local: al escribir o filtrar se cargan las paginas que
+  /// falten para que un usuario de la pagina 2 no quede invisible.
+  void _ensureAllUsersLoaded() {
+    unawaited(context.read<AdminUsuariosViewModel>().loadRemainingUsers());
+  }
+
   @override
   Widget build(BuildContext context) {
     final authVm = context.watch<AuthViewModel>();
@@ -114,138 +131,189 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     final usuarios = vm.usuarios;
     final usuariosFiltrados = _filteredUsers(usuarios);
 
-    return Scaffold(
-      backgroundColor: AdminPalette.pageBg,
-      appBar: AppBar(
-        backgroundColor: AdminPalette.appBar,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        titleSpacing: 12,
-        title: const Text(
-          'Panel de administración',
-          style: TextStyle(fontWeight: FontWeight.w600),
+    // El boton retroceder nativo pide confirmacion antes de cerrar la app.
+    return ExitConfirmGuard(
+      child: Scaffold(
+        backgroundColor: AdminPalette.pageBg,
+        appBar: AppBar(
+          backgroundColor: AdminPalette.appBar,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          titleSpacing: 12,
+          title: const Text(
+            'Panel de administración',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          toolbarHeight: 68,
+          actions: const [SessionActionsMenu()],
         ),
-        toolbarHeight: 68,
-        actions: const [SessionActionsMenu()],
-      ),
-      body: RefreshIndicator(
-        onRefresh: vm.loadUsers,
-        child: Stack(
-          children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: AdminPalette.chipBg,
-                      child: const Icon(
-                        Icons.person_rounded,
-                        color: AdminPalette.primary,
+        body: RefreshIndicator(
+          onRefresh: vm.loadUsers,
+          child: Stack(
+            children: [
+              ListView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: AdminPalette.chipBg,
+                        child: const Icon(
+                          Icons.person_rounded,
+                          color: AdminPalette.primary,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Hola, ${authVm.currentUser?.nombreCompleto ?? 'Administrador'}',
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: AdminPalette.textPrimary,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Hola, ${authVm.currentUser?.nombreCorto ?? 'Administrador'}',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: AdminPalette.textPrimary,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            authVm.currentUser?.rol ?? 'administrador',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: AdminPalette.muted,
+                            const SizedBox(height: 4),
+                            Text(
+                              authVm.currentUser?.rol ?? 'administrador',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: AdminPalette.muted,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                AdminSearchBar(
-                  controller: _searchController,
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 10),
-                FilterChipRow(
-                  selected: _selectedFilter,
-                  onSelected: (value) =>
-                      setState(() => _selectedFilter = value),
-                ),
-                const SizedBox(height: 14),
-                const SectionLabel(text: 'Usuarios registrados'),
-                if (vm.errorMessage != null)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFCEBEB),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: AdminPalette.border,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Text(
-                      vm.errorMessage!,
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  AdminSearchBar(
+                    controller: _searchController,
+                    onChanged: (_) {
+                      setState(() {});
+                      if (_searchController.text.trim().isNotEmpty) {
+                        _ensureAllUsersLoaded();
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  FilterChipRow(
+                    selected: _selectedFilter,
+                    onSelected: (value) {
+                      setState(() => _selectedFilter = value);
+                      if (value != AdminFilterType.all) {
+                        _ensureAllUsersLoaded();
+                      }
+                    },
+                  ),
+                  // Resumen en una sola linea discreta: las tarjetas ocupaban
+                  // media pantalla y empujaban la lista fuera de vista.
+                  if (vm.resumen != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      '${vm.resumen!.total} usuarios · '
+                      '${vm.resumen!.activos} activos · '
+                      '${vm.resumen!.inactivos} inactivos · '
+                      '${vm.resumen!.administradores} admin',
                       style: const TextStyle(
-                        color: Color(0xFF7A2820),
-                        fontSize: 12,
+                        fontSize: 11,
+                        color: AdminPalette.muted,
                       ),
                     ),
-                  ),
-                if (vm.isLoading && usuarios.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 70),
-                    child: Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                else if (usuariosFiltrados.isEmpty)
-                  AdminEmptyState(
-                    title: usuarios.isEmpty
-                        ? 'No hay usuarios'
-                        : 'Sin coincidencias',
-                    description: usuarios.isEmpty
-                        ? 'Aún no hay usuarios registrados en el sistema.'
-                        : 'Prueba otro nombre, correo o cambia los filtros.',
-                  )
-                else
-                  ...usuariosFiltrados.map(
-                    (usuario) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: UserCard(
-                        usuario: usuario,
-                        isBusy: vm.isSaving,
-                        onEdit: () => _openForm(usuario),
-                        onDelete: () => _confirmDelete(usuario),
+                    const SizedBox(height: 8),
+                  ] else
+                    const SizedBox(height: 14),
+                  const SectionLabel(text: 'Usuarios registrados'),
+                  if (vm.errorMessage != null)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFCEBEB),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AdminPalette.border,
+                          width: 0.5,
+                        ),
+                      ),
+                      child: Text(
+                        vm.errorMessage!,
+                        style: const TextStyle(
+                          color: Color(0xFF7A2820),
+                          fontSize: 12,
+                        ),
                       ),
                     ),
+                  if (vm.isLoading && usuarios.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 70),
+                      child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  else if (usuariosFiltrados.isEmpty)
+                    AdminEmptyState(
+                      title: usuarios.isEmpty
+                          ? 'No hay usuarios'
+                          : 'Sin coincidencias',
+                      description: usuarios.isEmpty
+                          ? 'Aún no hay usuarios registrados en el sistema.'
+                          : 'Prueba otro nombre, correo o cambia los filtros.',
+                    )
+                  else
+                    ...usuariosFiltrados.map(
+                      (usuario) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: UserCard(
+                          usuario: usuario,
+                          isBusy: vm.isSaving,
+                          isSelf: usuario.uid == authVm.currentUser?.uid,
+                          onEdit: () => _openForm(usuario),
+                          onDelete: () => _confirmDelete(usuario),
+                        ),
+                      ),
+                    ),
+                  if (vm.hasMore)
+                    TextButton.icon(
+                      onPressed: vm.isLoading
+                          ? null
+                          : () => vm.loadUsers(more: true),
+                      icon: const Icon(Icons.expand_more),
+                      label: Text(
+                        vm.isLoading ? 'Cargando...' : 'Cargar mas usuarios',
+                      ),
+                    ),
+                  if (vm.hasMore)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Text(
+                        'La búsqueda recorre los usuarios cargados; usa "Cargar más usuarios" para ver el resto.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AdminPalette.muted,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              Positioned(
+                right: 16,
+                bottom: 16,
+                child: SafeArea(
+                  child: AdminFloatingFab(
+                    onPressed: vm.isSaving ? null : () => _openForm(),
                   ),
-              ],
-            ),
-            Positioned(
-              right: 16,
-              bottom: 16,
-              child: SafeArea(
-                child: AdminFloatingFab(
-                  onPressed: vm.isSaving ? null : () => _openForm(),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
