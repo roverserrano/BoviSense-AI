@@ -9,6 +9,23 @@ class GanaderoRepository {
   GanaderoRepository({required ApiClient apiClient}) : _apiClient = apiClient;
 
   final ApiClient _apiClient;
+  GanaderoRepository newSession() => GanaderoRepository(apiClient: _apiClient);
+  String get apiBaseOrigin => _apiClient.baseOrigin;
+  String? conteosCursor;
+  String? alertasCursor;
+  Future<Map<String, dynamic>> issueCommand(
+    String command,
+    String requestId,
+  ) async => Map<String, dynamic>.from(
+    await _apiClient.post('/api/ganadero/iot/comandos', {
+      'command': command,
+      'request_id': requestId,
+    }),
+  );
+  Future<Map<String, dynamic>> verifyResponse(String frame) async =>
+      Map<String, dynamic>.from(
+        await _apiClient.post('/api/ganadero/iot/respuestas', {'frame': frame}),
+      );
 
   Future<GanaderoDashboardModel> obtenerDashboard() async {
     final response = await _apiClient.get('/api/ganadero/dashboard');
@@ -67,12 +84,12 @@ class GanaderoRepository {
   }
 
   Future<ConteoModel> registrarConteoReal({
-    required int cantidadDetectada,
-    String? sessionId,
+    required String proof,
+    required String sessionId,
   }) async {
     final response = await _apiClient.post('/api/ganadero/conteos', {
-      'cantidad_detectada': cantidadDetectada,
-      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+      'proof': proof,
+      'session_id': sessionId,
     });
 
     if (response is! Map<String, dynamic>) {
@@ -84,13 +101,16 @@ class GanaderoRepository {
     );
   }
 
-  Future<List<ConteoModel>> listarConteos() async {
-    final response = await _apiClient.get('/api/ganadero/conteos');
+  Future<List<ConteoModel>> listarConteos({String? cursor}) async {
+    final response = await _apiClient.get(
+      '/api/ganadero/conteos${cursor == null ? '' : '?cursor=${Uri.encodeQueryComponent(cursor)}'}',
+    );
 
     if (response is! Map<String, dynamic>) {
       throw Exception('Respuesta inválida del backend para el historial.');
     }
 
+    conteosCursor = response['next_cursor'] as String?;
     final data = (response['conteos'] as List<dynamic>? ?? []);
     return data
         .map((e) => ConteoModel.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -98,7 +118,9 @@ class GanaderoRepository {
   }
 
   Future<ConteoModel> obtenerConteoDetalle(String conteoId) async {
-    final response = await _apiClient.get('/api/ganadero/conteos/$conteoId');
+    final response = await _apiClient.get(
+      '/api/ganadero/conteos/${Uri.encodeComponent(conteoId)}',
+    );
 
     if (response is! Map<String, dynamic>) {
       throw Exception(
@@ -111,13 +133,16 @@ class GanaderoRepository {
     );
   }
 
-  Future<List<AlertaModel>> listarAlertas() async {
-    final response = await _apiClient.get('/api/ganadero/alertas');
+  Future<List<AlertaModel>> listarAlertas({String? cursor}) async {
+    final response = await _apiClient.get(
+      '/api/ganadero/alertas${cursor == null ? '' : '?cursor=${Uri.encodeQueryComponent(cursor)}'}',
+    );
 
     if (response is! Map<String, dynamic>) {
       throw Exception('Respuesta inválida del backend para alertas.');
     }
 
+    alertasCursor = response['next_cursor'] as String?;
     final data = (response['alertas'] as List<dynamic>? ?? []);
     return data
         .map((e) => AlertaModel.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -125,6 +150,9 @@ class GanaderoRepository {
   }
 
   Future<void> marcarAlertaLeida(String alertaId) async {
-    await _apiClient.put('/api/ganadero/alertas/$alertaId/leer', {});
+    await _apiClient.put(
+      '/api/ganadero/alertas/${Uri.encodeComponent(alertaId)}/leer',
+      {},
+    );
   }
 }

@@ -26,7 +26,7 @@ class AuthRepository {
     try {
       final credential = await _firebaseAuth.signInWithEmailAndPassword(
         email: email.trim().toLowerCase(),
-        password: password.trim(),
+        password: password,
       );
 
       final uid = credential.user?.uid;
@@ -45,31 +45,25 @@ class AuthRepository {
 
       return usuario;
     } on FirebaseAuthException catch (e) {
+      await _firebaseAuth.signOut();
       throw Exception(_mapAuthError(e));
-    } catch (e) {
-      throw Exception(e.toString().replaceFirst('Exception: ', ''));
-    }
-  }
-
-  Future<UsuarioModel?> restoreSession() async {
-    final currentUser = _firebaseAuth.currentUser;
-    if (currentUser == null) return null;
-
-    try {
-      final usuario = await _loadUserProfile(
-        uid: currentUser.uid,
-        email: currentUser.email?.toLowerCase() ?? '',
+    } on FirebaseException catch (e) {
+      // Firestore: distinguir falta de red de un problema de permisos o de datos.
+      await _firebaseAuth.signOut();
+      throw Exception(_mapFirestoreError(e));
+    } on Exception catch (e) {
+      await _firebaseAuth.signOut();
+      final message = e.toString().replaceFirst('Exception: ', '').trim();
+      throw Exception(
+        message.isEmpty
+            ? 'No se pudo cargar el perfil autorizado. Contacta al administrador.'
+            : message,
       );
-
-      if (usuario.estado.toLowerCase() != 'activo') {
-        await _firebaseAuth.signOut();
-        return null;
-      }
-
-      return usuario;
     } catch (e) {
       await _firebaseAuth.signOut();
-      rethrow;
+      throw Exception(
+        'No se pudo cargar el perfil autorizado. Revisa tu conexion o contacta al administrador.',
+      );
     }
   }
 
@@ -129,27 +123,16 @@ class AuthRepository {
     required String uid,
     required String email,
   }) async {
-    final byUid = await _firestore.collection('Usuarios').doc(uid).get();
+    final byUid = await _firestore
+        .collection('Usuarios')
+        .doc(uid)
+        .get(const GetOptions(source: Source.server));
 
     if (byUid.exists && byUid.data() != null) {
       return UsuarioModel.fromJson(byUid.data()!, documentId: byUid.id);
     }
 
-    final byEmail = await _firestore
-        .collection('Usuarios')
-        .where('correo', isEqualTo: email)
-        .limit(1)
-        .get();
-
-    if (byEmail.docs.isNotEmpty) {
-      throw Exception(
-        'El perfil existe, pero el ID del documento no coincide con el UID de Authentication. Usa como ID: $uid',
-      );
-    }
-
-    throw Exception(
-      'No existe el documento del perfil en Firestore en la ruta Usuarios/$uid',
-    );
+    throw Exception('El perfil no esta disponible. Contacta al administrador.');
   }
 
   String _mapAuthError(FirebaseAuthException e) {
@@ -164,8 +147,25 @@ class AuthRepository {
         return 'La cuenta está deshabilitada.';
       case 'too-many-requests':
         return 'Demasiados intentos. Intenta más tarde.';
+      case 'network-request-failed':
+        return 'Sin conexión con Firebase. Revisa el internet del teléfono e intenta nuevamente.';
       default:
         return e.message ?? 'No se pudo iniciar sesión.';
+    }
+  }
+
+  String _mapFirestoreError(FirebaseException e) {
+    switch (e.code) {
+      case 'unavailable':
+      case 'network-request-failed':
+        return 'Sin conexión con Firebase. Revisa el internet del teléfono e intenta nuevamente.';
+      case 'permission-denied':
+      case 'not-found':
+        return 'El perfil no está disponible. Contacta al administrador.';
+      case 'deadline-exceeded':
+        return 'Firebase tardó demasiado. Intenta nuevamente.';
+      default:
+        return 'No se pudo cargar el perfil autorizado (${e.code}).';
     }
   }
 

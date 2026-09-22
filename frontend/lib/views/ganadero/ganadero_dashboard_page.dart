@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../common/session_actions.dart';
 import '../../viewmodels/auth_view_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
+import '../../data/services/esp32_ble_bridge_service.dart';
 import 'conteo_detalle_page.dart';
 import 'ganadero_nav.dart';
 import 'widgets/ganadero_design_system.dart';
@@ -39,9 +40,13 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
   Widget build(BuildContext context) {
     final authVm = context.watch<AuthViewModel>();
     final vm = context.watch<GanaderoViewModel>();
+    final bridge = context.watch<Esp32BleBridgeService>();
     final dashboard = vm.dashboard;
     final usuario = authVm.currentUser;
-    final (nextTitle, nextDescription, nextButton) = _nextStepContent(vm);
+    final (nextTitle, nextDescription, nextButton) = _nextStepContent(
+      vm,
+      bridge,
+    );
 
     return Scaffold(
       appBar: GanaderoAppBar(
@@ -80,7 +85,7 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Hola, ${usuario?.nombreCompleto ?? 'Ganadero'}',
+                        'Hola, ${usuario?.nombreCorto ?? 'Ganadero'}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -140,6 +145,21 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                   ),
                 ],
               ),
+            if ((dashboard?.alertasPendientes ?? 0) > 0) ...[
+              const SizedBox(height: 10),
+              AlertCard(
+                title:
+                    'Tienes ${dashboard!.alertasPendientes} alerta(s) sin leer',
+                description:
+                    'Revisa los faltantes o excedentes detectados y márcalos como leídos.',
+                status: SimpleStatusType.inProgress,
+              ),
+              const SizedBox(height: 8),
+              OutlineActionButton(
+                label: 'Ver alertas',
+                onPressed: () => goToGanaderoTab(context, 3),
+              ),
+            ],
             const SizedBox(height: 16),
             const SectionTitle(text: 'Historial reciente'),
             if (dashboard == null || dashboard.conteosRecientes.isEmpty)
@@ -170,10 +190,18 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                       child: HistoryItem(
                         conteo: conteo,
                         onTap: () {
+                          final ganaderoVm = context.read<GanaderoViewModel>();
                           Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) =>
-                                  ConteoDetallePage(conteoId: conteo.id),
+                                  ChangeNotifierProvider<
+                                    GanaderoViewModel
+                                  >.value(
+                                    value: ganaderoVm,
+                                    child: ConteoDetallePage(
+                                      conteoId: conteo.id,
+                                    ),
+                                  ),
                             ),
                           );
                         },
@@ -194,7 +222,10 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
     );
   }
 
-  (String, String, String) _nextStepContent(GanaderoViewModel vm) {
+  (String, String, String) _nextStepContent(
+    GanaderoViewModel vm,
+    Esp32BleBridgeService bridge,
+  ) {
     if (vm.configuracion == null) {
       return (
         'Configura tu finca',
@@ -203,8 +234,9 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
       );
     }
 
-    final dispositivo = vm.dispositivo;
-    if (dispositivo == null || dispositivo.estadoConexion != 'conectado') {
+    // El estado real del puente lo conoce la app por BLE; el documento del
+    // dispositivo en el backend queda desactualizado y nunca dice "conectado".
+    if (!bridge.isConnected) {
       return (
         'Conecta el equipo',
         'Acerca el teléfono al equipo y prepara la revisión.',

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'session_notifier.dart';
 
 import '../data/models/alerta_model.dart';
 import '../data/models/configuracion_sistema_model.dart';
@@ -7,7 +7,7 @@ import '../data/models/dispositivo_conteo_model.dart';
 import '../data/models/ganadero_dashboard_model.dart';
 import '../data/repositories/ganadero_repository.dart';
 
-class GanaderoViewModel extends ChangeNotifier {
+class GanaderoViewModel extends SessionNotifier {
   GanaderoViewModel(this._repository);
 
   final GanaderoRepository _repository;
@@ -38,6 +38,7 @@ class GanaderoViewModel extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
 
   Future<void> loadDashboard() async {
+    if (disposed || _isLoadingDashboard) return;
     try {
       _isLoadingDashboard = true;
       _errorMessage = null;
@@ -52,13 +53,19 @@ class GanaderoViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> loadHistorial() async {
+  bool get hasMoreHistorial => _repository.conteosCursor != null;
+  bool get hasMoreAlertas => _repository.alertasCursor != null;
+  Future<void> loadHistorial({bool more = false}) async {
+    if (disposed || _isLoadingHistorial || (more && !hasMoreHistorial)) return;
     try {
       _isLoadingHistorial = true;
       _errorMessage = null;
       notifyListeners();
 
-      _historial = await _repository.listarConteos();
+      final items = await _repository.listarConteos(
+        cursor: more ? _repository.conteosCursor : null,
+      );
+      _historial = more ? [..._historial, ...items] : items;
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
     } finally {
@@ -67,13 +74,17 @@ class GanaderoViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> loadAlertas() async {
+  Future<void> loadAlertas({bool more = false}) async {
+    if (disposed || _isLoadingAlertas || (more && !hasMoreAlertas)) return;
     try {
       _isLoadingAlertas = true;
       _errorMessage = null;
       notifyListeners();
 
-      _alertas = await _repository.listarAlertas();
+      final items = await _repository.listarAlertas(
+        cursor: more ? _repository.alertasCursor : null,
+      );
+      _alertas = more ? [..._alertas, ...items] : items;
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
     } finally {
@@ -86,6 +97,7 @@ class GanaderoViewModel extends ChangeNotifier {
     required String nombreFinca,
     required int cantidadEsperada,
   }) async {
+    if (disposed || _isSavingConfig) return false;
     try {
       _isSavingConfig = true;
       _errorMessage = null;
@@ -112,16 +124,17 @@ class GanaderoViewModel extends ChangeNotifier {
   }
 
   Future<ConteoModel?> registrarConteoReal({
-    required int cantidadDetectada,
-    String? sessionId,
+    required String proof,
+    required String sessionId,
   }) async {
+    if (disposed || _isRegisteringCount) return null;
     try {
       _isRegisteringCount = true;
       _errorMessage = null;
       notifyListeners();
 
       final conteo = await _repository.registrarConteoReal(
-        cantidadDetectada: cantidadDetectada,
+        proof: proof,
         sessionId: sessionId,
       );
       await loadDashboard();

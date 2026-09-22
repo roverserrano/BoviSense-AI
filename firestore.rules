@@ -1,0 +1,16 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /Usuarios/{uid} {
+      allow get: if request.auth != null
+                 && request.auth.uid == uid
+                 && resource.data.estado == 'activo'
+                 && !('operacion_pendiente' in resource.data);
+      allow list, create, update, delete: if false;
+    }
+    // The Admin SDK authorizes all other operations through the API.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

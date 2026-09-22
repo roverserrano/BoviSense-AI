@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../data/models/usuario_model.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
+import '../../viewmodels/auth_view_model.dart';
 import 'widgets/admin_tokens.dart';
 import 'widgets/section_label.dart';
 
@@ -29,6 +30,11 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
   late String _estado;
 
   bool get _isEditing => widget.usuario != null;
+
+  /// El backend no permite que un administrador se quite su propio acceso.
+  bool get _isOwnAccount =>
+      _isEditing &&
+      widget.usuario!.uid == context.read<AuthViewModel>().currentUser?.uid;
 
   @override
   void initState() {
@@ -139,7 +145,9 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                   label: 'Apellidos',
                   child: TextFormField(
                     controller: _apellidosController,
-                    decoration: _fieldDecoration(),
+                    decoration: _fieldDecoration(
+                      hintText: 'Apellido paterno y materno',
+                    ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return 'Ingresa los apellidos';
@@ -242,6 +250,7 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                   onChanged: (value) {
                     if (value != null) setState(() => _rol = value);
                   },
+                  enabled: !_isOwnAccount,
                 ),
                 _thinDivider(),
                 if (_isEditing)
@@ -258,6 +267,7 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                     onChanged: (value) {
                       if (value != null) setState(() => _estado = value);
                     },
+                    enabled: !_isOwnAccount,
                   )
                 else
                   const Padding(
@@ -285,6 +295,16 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       ],
                     ),
                   ),
+                if (_isOwnAccount) ...[
+                  _thinDivider(),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    child: Text(
+                      'No puedes cambiar tu propio rol ni desactivar tu cuenta.',
+                      style: TextStyle(fontSize: 11, color: AdminPalette.muted),
+                    ),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 20),
@@ -421,6 +441,7 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
     required String value,
     required List<DropdownMenuItem<String>> items,
     required ValueChanged<String?> onChanged,
+    bool enabled = true,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -442,7 +463,7 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
               child: DropdownButtonFormField<String>(
                 initialValue: value,
                 items: items,
-                onChanged: onChanged,
+                onChanged: enabled ? onChanged : null,
                 decoration: const InputDecoration(
                   isDense: true,
                   filled: false,
@@ -469,15 +490,19 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
     );
   }
 
-  InputDecoration _fieldDecoration() {
-    return const InputDecoration(
+  InputDecoration _fieldDecoration({String? hintText}) {
+    return InputDecoration(
+      hintText: hintText,
+      hintStyle: const TextStyle(fontSize: 12, color: AdminPalette.muted),
       isDense: true,
       filled: false,
-      border: UnderlineInputBorder(borderSide: BorderSide.none),
-      enabledBorder: UnderlineInputBorder(borderSide: BorderSide.none),
-      focusedBorder: UnderlineInputBorder(borderSide: BorderSide.none),
-      errorBorder: UnderlineInputBorder(borderSide: BorderSide.none),
-      focusedErrorBorder: UnderlineInputBorder(borderSide: BorderSide.none),
+      border: const UnderlineInputBorder(borderSide: BorderSide.none),
+      enabledBorder: const UnderlineInputBorder(borderSide: BorderSide.none),
+      focusedBorder: const UnderlineInputBorder(borderSide: BorderSide.none),
+      errorBorder: const UnderlineInputBorder(borderSide: BorderSide.none),
+      focusedErrorBorder: const UnderlineInputBorder(
+        borderSide: BorderSide.none,
+      ),
       contentPadding: EdgeInsets.zero,
     );
   }

@@ -7,7 +7,9 @@ const STATES = new Set(['READY', 'STARTED', 'RUNNING', 'STOPPED', 'RESULT', 'ERR
 function secretKey() {
     const secret = process.env.IOT_SHARED_SECRET || '';
     if (!/^[a-fA-F0-9]{64}$/.test(secret)) {
-        throw new HttpError(503, 'El equipo de conteo no esta configurado en el servidor.');
+        const error = new HttpError(503, 'El equipo de conteo no esta configurado en el servidor.');
+        error.code = 'iot/secret-missing-or-invalid';
+        throw error;
     }
     return Buffer.from(secret, 'hex');
 }

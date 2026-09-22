@@ -4,7 +4,8 @@ import 'package:provider/provider.dart';
 import '../viewmodels/auth_view_model.dart';
 import 'admin/admin_dashboard_page.dart';
 import 'auth/login_page.dart';
-import 'ganadero/ganadero_dashboard_page.dart';
+import 'ganadero/ganadero_nav.dart';
+import 'common/app_splash_screen.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
@@ -14,9 +15,7 @@ class AuthGate extends StatelessWidget {
     return Consumer<AuthViewModel>(
       builder: (_, authViewModel, __) {
         if (authViewModel.isInitializing) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const AppSplashView();
         }
 
         if (!authViewModel.isAuthenticated) {
@@ -29,7 +28,7 @@ class AuthGate extends StatelessWidget {
           return const AdminDashboardPage();
         }
 
-        return const GanaderoDashboardPage();
+        return const GanaderoShellPage();
       },
     );
   }

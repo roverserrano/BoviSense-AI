@@ -1,9 +1,9 @@
 const { HttpError, integer, documentId } = require('./validation');
 
-async function page(collection, query = {}, sortField = null) {
+async function page(collection, query = {}, sortField = null, direction = 'desc') {
     const limit = integer(query.limit ?? 30, 'Limite', 1, 100);
     let request = sortField
-        ? collection.orderBy(sortField, 'desc').orderBy('__name__', 'desc')
+        ? collection.orderBy(sortField, direction).orderBy('__name__', direction)
         : collection.orderBy('__name__');
     if (query.cursor) {
         const cursor = await collection.doc(documentId(query.cursor)).get();

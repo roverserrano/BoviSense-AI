@@ -5,29 +5,33 @@ import time
 import socket
 import subprocess
 import argparse
+import fcntl
 import json
 import os
 import signal
 from pathlib import Path
 import spidev
 
-try:
-    import Jetson.GPIO as GPIO
-    GPIO_IMPORT_ERROR = None
-except Exception as exc:
-    GPIO = None
-    GPIO_IMPORT_ERROR = exc
+from secure_protocol import STATES, SecureProtocol
 
 # =========================================================
 # CONFIGURACIÓN
 # =========================================================
 SPI_BUS = 0
 SPI_DEV = 0
-SPI_SPEED_HZ = 500000
+SPI_SPEED_HZ = 10000
+SPI_LOCK_DIRECTORY = "/run"
 
-PIN_RST = 29
-USE_RST_PULSE = False  # False = solo mantener HIGH, no hacer pulso de reset
-USE_GPIO_RST = False   # False evita depender de Jetson.GPIO para iniciar.
+# Cableado confirmado (Jetson Orin Nano <-> SX1278), numeracion fisica:
+#   pin 17 (3.3 V) -> VCC y RST   (RST puenteado a 3.3 V de forma permanente)
+#   GND            -> GND
+#   pin 19 -> MOSI, pin 21 -> MISO, pin 23 -> SCK, pin 24 -> NSS/CS
+#   pin 31 -> DIO0
+#
+# El RST del SX1278 NO se controla por software: va fijo a 3.3 V. Este proceso
+# no reclama ningun GPIO para reset y el pin 29 queda libre; no volver a
+# cablear RST al 29 ni a manejarlo desde el receptor.
+PIN_DIO0 = 31
 
 FREQUENCY_HZ = 433_000_000
 SYNC_WORD = 0xF3
@@ -35,17 +39,26 @@ SPREADING_FACTOR = 7
 SIGNAL_BANDWIDTH_HZ = 125_000
 CODING_RATE_DENOMINATOR = 5
 CRC_ENABLED = True
-TX_POWER_DBM = 2
+TX_POWER_DBM = 17
 DEBUG_INTERVAL_S = 5.0
 STATUS_REPLY_REPEATS = 2
 STATUS_REPLY_REPEAT_DELAY_S = 0.35
 REGISTER_VERIFY_RETRIES = 4
-COUNT_PROJECT_DIR = "/home/cow/Documents/proyecto"
-COUNT_VENV_PYTHON = "/home/cow/Documents/proyecto/env_detection/bin/python3"
-COUNT_SCRIPT_PATH = "/home/cow/Documents/proyecto/run_bovino.py"
+LORA_INIT_ATTEMPTS = 3
+COUNT_PROJECT_DIR = "/home/cow/Documents/Script"
+COUNT_VENV_PYTHON = "/home/cow/Documents/Script/env_detection/bin/python3"
+COUNT_SCRIPT_PATH = "/home/cow/Documents/Script/run_bovino.py"
 COUNT_ENGINE_PATH = "/home/cow/Documents/proyecto/modelos/model_fp32.engine"
-COUNT_SOURCE_URL = "http://192.168.1.4:8080/video"
-COUNT_LOG_PATH = "/home/cow/Documents/proyecto/run_bovino_lora.log"
+COUNT_SOURCE_URL = "csi://0"
+COUNT_CSI_SENSOR_ID = 0
+COUNT_CSI_WIDTH = 1920
+COUNT_CSI_HEIGHT = 1080
+COUNT_CSI_FPS = 30
+COUNT_CSI_FLIP = 0
+COUNT_NO_DISPLAY = True
+COUNT_DISPLAY_WIDTH = 960
+COUNT_DISPLAY_HEIGHT = 540
+COUNT_LOG_PATH = "/home/cow/Documents/Script/run_bovino_lora.log"
 COUNT_MAX_DURATION_SEC = 600
 COUNT_STOP_TIMEOUT_SEC = 8
 
@@ -101,6 +114,21 @@ EXPECTED_VERSION = 0x12
 MAX_LORA_PAYLOAD_LENGTH = 220
 FIFO_RX_BASE_ADDR = 0x00
 FIFO_TX_BASE_ADDR = 0x80
+SECURE_COMMAND_LABELS = {
+    "H": "ESTADO",
+    "P": "PREPARARCONTEO",
+    "S": "INICIARCONTEO",
+    "T": "DETENERCONTEO",
+    "Q": "ESTADOCONTEO",
+    "R": "RESULTADOCONTEO",
+}
+SECURE_STATUS_ALIASES = {
+    "STOPPING": "RUNNING",
+}
+
+# Centinela: distingue "usa el conteo actual" de "este estado no lleva conteo".
+# Evita adjuntar el conteo de otra sesion a un ERROR o a un IDLE.
+_NO_COUNT = object()
 
 
 def format_hex(value):
@@ -110,33 +138,10 @@ def format_hex(value):
 class SX1278Receiver:
     def __init__(self, crc_enabled=CRC_ENABLED, debug_interval_s=DEBUG_INTERVAL_S):
         self.spi = spidev.SpiDev()
-        self.gpio_ready = False
+        self.spi_lock_fd = None
         self.crc_enabled = crc_enabled
         self.debug_interval_s = debug_interval_s
         self.last_debug_at = 0.0
-
-    def setup_gpio(self):
-        if GPIO is None:
-            print(f"[GPIO] Jetson.GPIO no disponible: {GPIO_IMPORT_ERROR}")
-            print("[GPIO] Continuando sin controlar RST. Asegura RST del SX1278 en HIGH.")
-            return False
-
-        GPIO.setwarnings(False)
-        GPIO.setmode(GPIO.BOARD)
-        GPIO.setup(PIN_RST, GPIO.OUT, initial=GPIO.HIGH)
-        GPIO.output(PIN_RST, GPIO.HIGH)  # mantener fuera de reset
-        self.gpio_ready = True
-        return True
-
-    def pulse_reset(self):
-        if GPIO is None or not self.gpio_ready:
-            print("[GPIO] Pulso RST omitido porque GPIO no esta disponible.")
-            return
-
-        GPIO.output(PIN_RST, GPIO.LOW)
-        time.sleep(0.01)
-        GPIO.output(PIN_RST, GPIO.HIGH)
-        time.sleep(0.05)
 
     def read_reg(self, reg):
         return self.spi.xfer2([reg & 0x7F, 0x00])[1]
@@ -243,7 +248,34 @@ class SX1278Receiver:
             time.sleep(delay)
         return values
 
+    def acquire_spi_lock(self):
+        lock_path = f"{SPI_LOCK_DIRECTORY}/bovisense-spidev{SPI_BUS}.{SPI_DEV}.lock"
+        try:
+            lock_fd = os.open(
+                lock_path,
+                os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError as exc:
+            print(f"[SPI] No se pudo abrir bloqueo exclusivo {lock_path}: {exc}")
+            return False
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("[SPI] Otro receptor BoviSense ya controla el SX1278. Deten esta segunda instancia.")
+            os.close(lock_fd)
+            return False
+        except OSError as exc:
+            print(f"[SPI] No se pudo bloquear {lock_path}: {exc}")
+            os.close(lock_fd)
+            return False
+        self.spi_lock_fd = lock_fd
+        print(f"[SPI] Acceso exclusivo al SX1278 adquirido (PID {os.getpid()}).")
+        return True
+
     def begin(self):
+        if not self.acquire_spi_lock():
+            return False
         self.spi.open(SPI_BUS, SPI_DEV)
         self.spi.max_speed_hz = SPI_SPEED_HZ
         self.spi.mode = 0
@@ -257,36 +289,45 @@ class SX1278Receiver:
             f"a {SPI_SPEED_HZ} Hz, mode=0, CS activo en LOW"
         )
 
-        # Si RST está cableado a PIN_RST, se puede habilitar con --use-gpio-rst.
-        if USE_GPIO_RST or USE_RST_PULSE:
-            self.setup_gpio()
-        else:
-            print("[GPIO] Control RST desactivado. RST del SX1278 debe estar en HIGH.")
-            print("[GPIO] Si RST esta desconectado/flotando, el SX1278 puede recibir pero fallar al transmitir.")
+        print(
+            "[GPIO] Cableado confirmado: VCC y RST del SX1278 a 3.3 V (pin 17), "
+            f"DIO0 en pin {PIN_DIO0}."
+        )
+        print(
+            "[GPIO] El RST va puenteado a 3.3 V: no se controla por GPIO, "
+            "el pin 29 no se usa y DIO0 no es necesario (RX por REG_IRQ_FLAGS)."
+        )
 
-        # Solo si quieres forzar reset, se hace el pulso
-        if USE_RST_PULSE:
-            self.pulse_reset()
+        for attempt in range(1, LORA_INIT_ATTEMPTS + 1):
+            versions = self.read_version_stable()
+            print("Lecturas REG_VERSION:", [f"0x{v:02X}" for v in versions])
 
-        versions = self.read_version_stable()
-        print("Lecturas REG_VERSION:", [f"0x{v:02X}" for v in versions])
+            if not all(v == EXPECTED_VERSION for v in versions):
+                print("[SPI] REG_VERSION inestable; reintentando inicializacion.")
+                continue
 
-        if not all(v == EXPECTED_VERSION for v in versions):
-            return False
+            if self.configure_lora_registers() and self.set_rx_continuous():
+                self.print_radio_config()
+                return True
 
-        if not self.configure_lora_registers():
-            return False
+            print(
+                "[LoRa] Inicializacion incompleta; "
+                f"reintentando configuracion ({attempt}/{LORA_INIT_ATTEMPTS})."
+            )
 
-        self.set_rx_continuous()
-
-        self.print_radio_config()
-
-        return True
+        return False
 
     def configure_lora_registers(self):
-        # SX127x only allows changing LongRangeMode reliably while sleeping.
-        self.write_reg(REG_OP_MODE, MODE_SLEEP)
-        time.sleep(0.01)
+        # LongRangeMode can only change in Sleep. Keep it set when leaving LoRa RX.
+        op_mode = self.read_reg(REG_OP_MODE)
+        if not op_mode & MODE_LONG_RANGE_MODE:
+            if not self.write_reg_checked(
+                REG_OP_MODE,
+                MODE_LOW_FREQUENCY_MODE | MODE_SLEEP,
+                "OP_MODE sleep FSK",
+            ):
+                print("[LoRa] No se pudo entrar en sleep FSK.")
+                return False
         if not self.set_sleep():
             print("[LoRa] No se pudo entrar en modo LoRa sleep.")
             return False
@@ -348,7 +389,7 @@ class SX1278Receiver:
             "  Radio: "
             f"SF={SPREADING_FACTOR} BW={SIGNAL_BANDWIDTH_HZ // 1000}kHz "
             f"CR=4/{CODING_RATE_DENOMINATOR} CRC={'ON' if self.crc_enabled else 'OFF'} "
-            f"SyncWord={format_hex(SYNC_WORD)}"
+            f"SyncWord={format_hex(SYNC_WORD)} TX={TX_POWER_DBM}dBm"
         )
         print("  Registros:", " ".join(f"{k}={format_hex(v)}" for k, v in regs.items()))
 
@@ -384,16 +425,15 @@ class SX1278Receiver:
             print(f"TX omitido: payload demasiado largo ({len(payload)} bytes)")
             return False
 
-        if not self.configure_lora_registers():
-            print("TX omitido: el SX1278 no acepto la configuracion LoRa.")
-            self.set_rx_continuous()
+        if not self.set_standby():
+            print("TX omitido: el SX1278 no salio de RX continuo.")
             return False
 
         time.sleep(0.01)
         if not self.write_reg_checked(REG_FIFO_ADDR_PTR, FIFO_TX_BASE_ADDR, "FIFO_ADDR_PTR TX"):
             print("TX omitido: no se pudo posicionar FIFO TX.")
             print("DIAGNOSTICO: el SX1278 no acepta escrituras SPI criticas para transmitir.")
-            print("ACCION: conecta RST del SX1278 a 3.3V estable o a un GPIO controlado; no lo dejes flotando.")
+            print("DIAGNOSTICO: comprobar SPI y estado OP_MODE antes de otro intento.")
             self.set_rx_continuous()
             return False
 
@@ -401,15 +441,27 @@ class SX1278Receiver:
         self.fifo_write_bytes(payload)
         if not self.write_reg_checked(REG_PAYLOAD_LENGTH, len(payload), "PAYLOAD_LENGTH TX"):
             print("TX omitido: el SX1278 no acepto PAYLOAD_LENGTH.")
-            print("DIAGNOSTICO: el FIFO TX no quedo configurado; revisa RST, NSS/CS, MOSI y alimentacion 3.3V.")
+            print(
+                "DIAGNOSTICO: el FIFO TX no quedo configurado; revisa NSS/CS, MOSI y "
+                "alimentacion 3.3V, y confirma que RST del SX1278 esta puenteado a 3.3V (pin 17)."
+            )
             self.set_rx_continuous()
             return False
 
         self.write_reg(REG_IRQ_FLAGS, IRQ_ALL_CLEAR)
+        if self.read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK:
+            print("TX omitido: TxDone anterior no se pudo limpiar.")
+            self.set_rx_continuous()
+            return False
+        payload_len = self.read_reg(REG_PAYLOAD_LENGTH)
+        if payload_len != len(payload):
+            print(f"TX omitido: PAYLOAD_LENGTH cambio a {payload_len}; esperado={len(payload)}.")
+            self.set_rx_continuous()
+            return False
         print(
             "TX preparando: "
             f"len={len(payload)} base={format_hex(FIFO_TX_BASE_ADDR)} "
-            f"payload_len={self.read_reg(REG_PAYLOAD_LENGTH)} "
+            f"payload_len={payload_len} "
             f"op={format_hex(self.read_reg(REG_OP_MODE))}"
         )
         if not self.write_reg_checked(
@@ -426,12 +478,14 @@ class SX1278Receiver:
             irq_flags = self.read_reg(REG_IRQ_FLAGS)
             if irq_flags & IRQ_TX_DONE_MASK:
                 self.write_reg(REG_IRQ_FLAGS, IRQ_ALL_CLEAR)
-                self.set_rx_continuous()
+                if not self.set_standby() or not self.set_rx_continuous():
+                    print("[LoRa] TX completado; no se pudo restablecer RX continuo.")
                 return True
             time.sleep(0.01)
 
         self.write_reg(REG_IRQ_FLAGS, IRQ_ALL_CLEAR)
-        self.set_rx_continuous()
+        if self.set_standby():
+            self.set_rx_continuous()
         print("TX timeout: no se confirmo TxDone")
         return False
 
@@ -501,11 +555,12 @@ class SX1278Receiver:
             self.spi.close()
         except Exception:
             pass
-        try:
-            if self.gpio_ready:
-                GPIO.cleanup()
-        except Exception:
-            pass
+        if self.spi_lock_fd is not None:
+            try:
+                fcntl.flock(self.spi_lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self.spi_lock_fd)
+                self.spi_lock_fd = None
 
 
 def clean_field(value, fallback="No disponible", max_length=32):
@@ -649,7 +704,7 @@ class CountSessionController:
         self.log("PREPARARCONTEO listo")
         return self.response_fields("READY", detail="ok", session="none")
 
-    def start(self):
+    def start(self, session_id=None):
         self.sync_worker_state()
         if self.is_worker_alive():
             self.log("INICIARCONTEO rechazado: sesion activa")
@@ -670,7 +725,7 @@ class CountSessionController:
             )
             return self.response_fields("ERROR", detail=runtime_error, session="none")
 
-        session_id = self.new_session_id()
+        session_id = session_id or self.new_session_id()
         now = time.time()
         status_file = f"/tmp/bovisense_count_{session_id}_status.json"
         result_file = f"/tmp/bovisense_count_{session_id}_result.json"
@@ -709,10 +764,10 @@ class CountSessionController:
             )
 
             self.log("[Conteo] Ejecutando worker:")
-            self.log(f"[Conteo] {command}")
+            self.log(f"[Conteo] {' '.join(command)}")
             self.log(f"[Conteo] Log: {COUNT_LOG_PATH}")
             self.process = subprocess.Popen(
-                ["bash", "-lc", command],
+                command,
                 stdout=self.log_file,
                 stderr=self.log_file,
                 cwd=COUNT_PROJECT_DIR,
@@ -733,14 +788,47 @@ class CountSessionController:
             self.finish_session("launch_failed", status="ERROR", detail=detail)
             return self.response_fields("ERROR", detail=detail, session=session_id)
 
-    def stop(self, reason="stopped_by_app"):
+    def stop(self, reason="stopped_by_app", requested_session=None):
         self.sync_worker_state(skip_timeout=True)
-        if self.session is None or not self.is_worker_alive():
-            self.log("DETENERCONTEO sin sesion activa")
+
+        if self.session is None:
+            if self.result_matches_requested_session(requested_session):
+                return self.result_response(status="STOPPED")
+
+            # Sin sesion en memoria no hay conflicto que resolver: el equipo
+            # simplemente esta inactivo. Responder ERROR aqui hacia que la app
+            # mostrara una falla de hardware y no pudiera recuperarse.
+            self.log(
+                f"DETENERCONTEO sin sesion activa (solicitada={requested_session}); "
+                "se responde IDLE"
+            )
+            return self.idle_fields()
+
+        if not self.matches_requested_session(requested_session):
+            self.log(
+                f"DETENERCONTEO rechazado: sesion solicitada={requested_session} "
+                f"sesion_actual={self.session_id()}"
+            )
+            return self.response_fields(
+                "ERROR",
+                detail="session_mismatch",
+                session=requested_session or "none",
+                alive=self.is_worker_alive(),
+                count=None,
+            )
+
+        if not self.is_worker_alive():
+            self.log("DETENERCONTEO sin worker activo")
+
+            if self.result_matches_requested_session(requested_session):
+                return self.result_response(status="STOPPED")
+
             return self.response_fields(
                 "ERROR",
                 detail="no_active_session",
-                session=self.session_id(),
+                session="none",
+                alive=False,
+                count=None,
             )
 
         session_id = self.session_id()
@@ -768,15 +856,26 @@ class CountSessionController:
         self.finish_session(finish_reason, status="STOPPED", detail=finish_reason)
         return self.result_response(status="STOPPED")
 
-    def status(self):
+    def status(self, requested_session=None):
         self.sync_worker_state()
-        if self.session is None:
+
+        if self.session is None and not self.result_matches_requested_session(
+            requested_session
+        ):
+            # El equipo no tiene sesion ni resultado de lo solicitado: esta
+            # disponible. Devolver ERROR haria parecer una falla del hardware.
+            return self.idle_fields()
+
+        if not self.matches_requested_session(requested_session):
             return self.response_fields(
-                "IDLE",
-                detail="no_active_session",
-                session="none",
-                alive=False,
+                "ERROR",
+                detail="session_mismatch",
+                session=requested_session or "none",
+                alive=self.is_worker_alive(),
+                count=None,
             )
+        if self.session is None:
+            return self.idle_fields()
 
         return self.response_fields(
             self.session["status"],
@@ -784,21 +883,34 @@ class CountSessionController:
             session=self.session_id(),
         )
 
-    def result(self):
+    def result(self, requested_session=None):
         self.sync_worker_state()
-        if self.last_result is not None:
-            return self.result_response(status="RESULT")
-        if self.session is not None:
+
+        if self.session is None:
+            if self.result_matches_requested_session(requested_session):
+                return self.result_response(status="RESULT")
+            return self.idle_fields()
+
+        if not self.matches_requested_session(requested_session):
+            return self.response_fields(
+                "ERROR",
+                detail="session_mismatch",
+                session=requested_session or "none",
+                alive=self.is_worker_alive(),
+                count=None,
+            )
+        if self.is_worker_alive():
             return self.response_fields(
                 self.session["status"],
                 detail="result_not_available_yet",
                 session=self.session_id(),
             )
+        if self.result_matches_requested_session(requested_session):
+            return self.result_response(status="RESULT")
         return self.response_fields(
-            "ERROR",
-            detail="result_not_available",
-            session="none",
-            alive=False,
+            self.session["status"],
+            detail="result_not_available_yet",
+            session=self.session_id(),
         )
 
     def sync_worker_state(self, skip_timeout=False):
@@ -858,7 +970,8 @@ class CountSessionController:
             self.session["detail"] = str(detail)
         if final:
             reason = data.get("reason") or "worker_result"
-            self.finish_session(reason, status="STOPPED", detail=str(reason))
+            status = self.worker_final_status(data.get("status"), reason)
+            self.finish_session(reason, status=status, detail=str(reason))
 
     def read_worker_log(self):
         if self.session is None:
@@ -886,7 +999,9 @@ class CountSessionController:
                 fields = self.parse_pipe_fields(line)
                 if "count" in fields:
                     self.session["count"] = fields["count"]
-                self.finish_session("worker_final", status="STOPPED", detail="worker_final")
+                reason = fields.get("reason", "worker_final")
+                status = self.worker_final_status(None, reason)
+                self.finish_session(reason, status=status, detail=reason)
             elif line.startswith("WORKER_STATUS|"):
                 fields = self.parse_pipe_fields(line)
                 if "status" in fields:
@@ -908,6 +1023,7 @@ class CountSessionController:
             pid=self.session.get("pid"),
             elapsed=self.elapsed_sec(),
             count=self.session.get("count"),
+            completed=int(self.session["end_time"]),
         )
         self.log(
             f"Sesion {self.session['id']} finalizada status={status} "
@@ -920,6 +1036,7 @@ class CountSessionController:
         if self.session is None:
             return
         self.read_worker_json(self.session.get("status_file"), final=False)
+        self.read_worker_json(self.session.get("result_file"), final=False)
         self.read_worker_log_updates_only()
 
     def read_worker_log_updates_only(self):
@@ -937,29 +1054,74 @@ class CountSessionController:
         except Exception:
             return
         for line in lines:
-            if line.startswith("COUNT_UPDATE|") or line.startswith("COUNT_FINAL|"):
+            if (
+                line.startswith("COUNT_UPDATE|")
+                or line.startswith("COUNT_FINAL|")
+                or line.startswith("WORKER_STATUS|")
+            ):
                 fields = self.parse_pipe_fields(line.strip())
                 if "count" in fields:
                     self.session["count"] = fields["count"]
 
-    def build_shell_command(self):
-        return (
-            f"cd {COUNT_PROJECT_DIR} && "
-            "source env_detection/bin/activate && "
-            f"python3 {COUNT_SCRIPT_PATH} "
-            f"--engine {COUNT_ENGINE_PATH} "
-            f"--source {COUNT_SOURCE_URL}"
-        )
+    @staticmethod
+    def worker_final_status(worker_status, reason):
+        status_text = str(worker_status or "").strip().lower()
+        reason_text = str(reason or "").strip().lower()
+        error_reasons = {
+            "capture_open_failed",
+            "inference_error",
+            "runtime_validation_failed",
+            "launch_failed",
+        }
+        if status_text == "error" or reason_text in error_reasons:
+            return "ERROR"
+        return "STOPPED"
 
-    def response_fields(self, status, detail="", session=None, alive=None):
+    def build_shell_command(self):
+        args = [
+            COUNT_VENV_PYTHON,
+            COUNT_SCRIPT_PATH,
+            "--engine",
+            COUNT_ENGINE_PATH,
+            "--source",
+            COUNT_SOURCE_URL,
+            "--csi-sensor-id",
+            str(COUNT_CSI_SENSOR_ID),
+            "--csi-width",
+            str(COUNT_CSI_WIDTH),
+            "--csi-height",
+            str(COUNT_CSI_HEIGHT),
+            "--csi-fps",
+            str(COUNT_CSI_FPS),
+            "--csi-flip",
+            str(COUNT_CSI_FLIP),
+        ]
+        if COUNT_NO_DISPLAY:
+            args.append("--no-display")
+        else:
+            args.extend(
+                [
+                    "--display-width",
+                    str(COUNT_DISPLAY_WIDTH),
+                    "--display-height",
+                    str(COUNT_DISPLAY_HEIGHT),
+                ]
+            )
+
+        return [str(value) for value in args]
+
+    def response_fields(
+        self, status, detail="", session=None, alive=None, count=_NO_COUNT
+    ):
         active_alive = self.is_worker_alive() if alive is None else alive
+        current = self.current_count() if count is _NO_COUNT else count
         fields = {
             "status": status,
             "session": session or self.session_id(),
             "alive": str(active_alive).lower(),
             "elapsed": str(self.elapsed_sec()),
             "pid": str(self.pid_value()),
-            "count": self.count_text(self.current_count()),
+            "count": self.count_text(current),
         }
         if detail:
             fields["detail"] = detail
@@ -968,10 +1130,22 @@ class CountSessionController:
             fields["reason"] = reason
         return fields
 
+    def idle_fields(self, detail="no_active_session"):
+        """Respuesta de equipo sin sesion: nunca arrastra conteos anteriores."""
+        return self.response_fields(
+            "IDLE",
+            detail=detail,
+            session="none",
+            alive=False,
+            count=None,
+        )
+
     def result_response(self, status="RESULT"):
         result = self.last_result or {}
+        stored_status = str(result.get("status", "")).upper()
+        response_status = "ERROR" if stored_status == "ERROR" else status
         return {
-            "status": status,
+            "status": response_status,
             "session": str(result.get("session", self.session_id())),
             "alive": "false",
             "elapsed": str(result.get("elapsed", self.elapsed_sec())),
@@ -979,6 +1153,7 @@ class CountSessionController:
             "count": self.count_text(result.get("count", self.current_count())),
             "reason": str(result.get("reason", self.current_reason() or "unknown")),
             "detail": str(result.get("detail", "result")),
+            "completed": str(result.get("completed", "")),
         }
 
     def new_result(
@@ -990,6 +1165,7 @@ class CountSessionController:
         pid=None,
         elapsed=0,
         count=None,
+        completed=None,
     ):
         return {
             "session": session_id,
@@ -999,6 +1175,7 @@ class CountSessionController:
             "pid": pid,
             "elapsed": elapsed,
             "count": count,
+            "completed": int(completed or time.time()),
         }
 
     def is_worker_alive(self):
@@ -1023,6 +1200,21 @@ class CountSessionController:
         if self.last_result is not None:
             return self.last_result.get("reason", "")
         return ""
+
+    def matches_requested_session(self, requested_session):
+        if not requested_session or requested_session == "-":
+            return True
+        current = self.session_id()
+        if current != "none":
+            return current == requested_session
+        return self.result_matches_requested_session(requested_session)
+
+    def result_matches_requested_session(self, requested_session):
+        if self.last_result is None:
+            return False
+        if not requested_session or requested_session == "-":
+            return True
+        return str(self.last_result.get("session", "")) == requested_session
 
     def pid_value(self):
         if self.session is not None and self.session.get("pid"):
@@ -1069,6 +1261,112 @@ class CountSessionController:
 
 
 count_controller = CountSessionController()
+secure_protocol = None
+
+
+def configure_secure_protocol():
+    global secure_protocol
+    secure_protocol = SecureProtocol()
+    print("[Seguridad] Protocolo C1/R1 autenticado activo.")
+    print("[Seguridad] IOT_SHARED_SECRET cargado y replay protection persistente habilitado.")
+
+
+def secure_count(value):
+    if type(value) is int and 0 <= value <= 1_000_000:
+        return value
+    text = str(value or "").strip()
+    if text.isdigit():
+        parsed = int(text)
+        if 0 <= parsed <= 1_000_000:
+            return parsed
+    return None
+
+
+def secure_completed(fields, status, count):
+    if status not in {"STOPPED", "RESULT"} or count is None:
+        return None
+    value = fields.get("completed")
+    if type(value) is int and value > 0:
+        return value
+    text = str(value or "").strip()
+    if text.isdigit() and int(text) > 0:
+        return int(text)
+    return int(time.time())
+
+
+def secure_status(fields):
+    status = str(fields.get("status", "ERROR")).strip().upper()
+    status = SECURE_STATUS_ALIASES.get(status, status)
+    return status if status in STATES else "ERROR"
+
+
+def normalize_secure_fields(fields):
+    status = secure_status(fields)
+    count = secure_count(fields.get("count"))
+    return {
+        "status": status,
+        "count": count,
+        "completed": secure_completed(fields, status, count),
+    }
+
+
+def active_session_conflicts(session):
+    current = count_controller.session_id()
+    return current != "none" and current != session and count_controller.is_worker_alive()
+
+
+def execute_secure_command(command, session):
+    label = SECURE_COMMAND_LABELS.get(command, command)
+    print(f"[Seguro] Comando {label} recibido session={session}")
+    count_controller.sync_worker_state()
+
+    if command == "H":
+        fields = count_controller.status()
+    elif command == "P":
+        fields = count_controller.prepare()
+    elif command == "S":
+        fields = count_controller.start(session_id=session)
+    elif command in {"T", "Q", "R"} and active_session_conflicts(session):
+        fields = count_controller.response_fields(
+            "BUSY",
+            detail="another_session_active",
+            session=count_controller.session_id(),
+        )
+    elif command == "T":
+        fields = count_controller.stop(requested_session=session)
+    elif command == "Q":
+        fields = count_controller.status(requested_session=session)
+    elif command == "R":
+        fields = count_controller.result(requested_session=session)
+    else:
+        fields = {"status": "ERROR", "detail": "unsupported_command"}
+
+    secure_fields = normalize_secure_fields(fields)
+    print(
+        "[Seguro] Resultado "
+        f"status={secure_fields['status']} "
+        f"count={secure_fields['count'] if secure_fields['count'] is not None else '-'}"
+    )
+    return secure_fields
+
+
+def maybe_reply_to_secure_command(rx, payload):
+    if secure_protocol is None:
+        print("[Seguro] C1 recibido, pero IOT_SHARED_SECRET/protocolo no esta configurado.")
+        return True
+
+    frame = payload.strip()
+    try:
+        response = secure_protocol.handle(frame, execute_secure_command)
+    except ValueError as exc:
+        print(f"[Seguro] Comando rechazado: {exc}")
+        return True
+    except Exception as exc:
+        print(f"[Seguro] Error procesando comando: {exc}")
+        return True
+
+    send_response(rx, response, "C1/R1")
+    return True
 
 
 def build_count_response(msg_id, fields):
@@ -1076,7 +1374,7 @@ def build_count_response(msg_id, fields):
     for key, value in fields.items():
         safe_value = clean_field(value, fallback="unknown", max_length=48)
         safe_fields.append(f"{key}={safe_value}")
-    return f"RESP|{msg_id}|COUNT|" + "|".join(safe_fields)
+    return f"RESP|{msg_id}|JETSON_COUNT|" + "|".join(safe_fields)
 
 
 def send_response(rx, response, label):
@@ -1087,7 +1385,10 @@ def send_response(rx, response, label):
             time.sleep(STATUS_REPLY_REPEAT_DELAY_S)
         if rx.transmit_text(response):
             sent_count += 1
-            print(f"Respuesta {label} enviada al ESP32 ({attempt + 1}/{STATUS_REPLY_REPEATS}).")
+            print(
+                f"Respuesta {label}: TxDone confirmado por SX1278 "
+                f"({attempt + 1}/{STATUS_REPLY_REPEATS}); recepcion ESP32 sin confirmar."
+            )
         else:
             print(f"No se pudo enviar la respuesta {label} ({attempt + 1}/{STATUS_REPLY_REPEATS}).")
     if sent_count == 0:
@@ -1095,9 +1396,30 @@ def send_response(rx, response, label):
 
 
 def maybe_reply_to_command(rx, payload):
-    parts = payload.strip().split("|")
+    frame = payload.strip()
+    if frame.startswith("C1|"):
+        if maybe_reply_to_secure_command(rx, frame):
+            return
+    if frame.startswith("R1|"):
+        print("[LoRa] Eco/respuesta propia ignorada.")
+        return
+
+    parts = frame.split("|")
     command = parts[0].upper() if parts else ""
     msg_id = "0"
+
+    legacy_commands = {
+        "BRIDGE",
+        "ESTADO",
+        "PREPARARCONTEO",
+        "INICIARCONTEO",
+        "DETENERCONTEO",
+        "ESTADOCONTEO",
+        "RESULTADOCONTEO",
+    }
+    if command not in legacy_commands:
+        print("[LoRa] Paquete no reconocido ignorado.")
+        return
 
     if command == "BRIDGE" and len(parts) >= 3:
         msg_id = parts[1] if parts[1].isdigit() else "0"
@@ -1161,6 +1483,12 @@ def parse_args():
         help="Dispositivo SPI: 0 usa CE0/pin fisico 24, 1 usa CE1/pin fisico 26.",
     )
     parser.add_argument(
+        "--tx-power",
+        type=int,
+        default=TX_POWER_DBM,
+        help="Potencia TX LoRa en dBm para PA_BOOST. SX1278 acepta aprox. 2..17.",
+    )
+    parser.add_argument(
         "--count-script",
         default=COUNT_SCRIPT_PATH,
         help="Ruta de run_bovino.py para INICIARCONTEO.",
@@ -1183,7 +1511,54 @@ def parse_args():
     parser.add_argument(
         "--count-source",
         default=COUNT_SOURCE_URL,
-        help="Fuente de video para run_bovino.py.",
+        help="Fuente de video para run_bovino.py. Para IMX219 usar csi://0 o csi://1.",
+    )
+    parser.add_argument(
+        "--count-csi-sensor-id",
+        type=int,
+        default=COUNT_CSI_SENSOR_ID,
+        help="sensor-id de nvarguscamerasrc para cámara CSI/IMX219.",
+    )
+    parser.add_argument(
+        "--count-csi-width",
+        type=int,
+        default=COUNT_CSI_WIDTH,
+        help="Ancho de captura CSI/IMX219.",
+    )
+    parser.add_argument(
+        "--count-csi-height",
+        type=int,
+        default=COUNT_CSI_HEIGHT,
+        help="Alto de captura CSI/IMX219.",
+    )
+    parser.add_argument(
+        "--count-csi-fps",
+        type=int,
+        default=COUNT_CSI_FPS,
+        help="FPS de captura CSI/IMX219.",
+    )
+    parser.add_argument(
+        "--count-csi-flip",
+        type=int,
+        default=COUNT_CSI_FLIP,
+        help="flip-method de nvvidconv para orientar la IMX219.",
+    )
+    parser.add_argument(
+        "--count-display",
+        action="store_true",
+        help="Abre ventana OpenCV en el worker. Por defecto LoRa usa modo sin display.",
+    )
+    parser.add_argument(
+        "--count-display-width",
+        type=int,
+        default=COUNT_DISPLAY_WIDTH,
+        help="Ancho máximo de la ventana OpenCV cuando se usa --count-display. Usa 0 para no limitar.",
+    )
+    parser.add_argument(
+        "--count-display-height",
+        type=int,
+        default=COUNT_DISPLAY_HEIGHT,
+        help="Alto máximo de la ventana OpenCV cuando se usa --count-display. Usa 0 para no limitar.",
     )
     parser.add_argument(
         "--count-log",
@@ -1202,35 +1577,61 @@ def parse_args():
         default=COUNT_STOP_TIMEOUT_SEC,
         help="Segundos para esperar SIGTERM antes de SIGKILL.",
     )
+    # Obsoletos: el RST del SX1278 va puenteado a 3.3 V (pin 17) y ya no se
+    # controla por GPIO. Se siguen aceptando para no romper unidades systemd
+    # existentes que aun los pasen, pero se ignoran por completo.
+    parser.add_argument("--use-gpio-rst", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--rst-gpio-line", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--rst-gpio-chip", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--rst-gpio-offset", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument(
-        "--reset-pulse",
-        action="store_true",
-        help="Hace un pulso LOW/HIGH en RST durante el arranque si Jetson.GPIO esta disponible.",
-    )
-    parser.add_argument(
-        "--use-gpio-rst",
-        action="store_true",
-        help="Mantiene RST en HIGH usando Jetson.GPIO. No usar si Jetson.GPIO falla detectando el modelo.",
+        "--lora-init-attempts",
+        type=int,
+        default=LORA_INIT_ATTEMPTS,
+        help="Cantidad de intentos de configuracion antes de fallar.",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    global USE_RST_PULSE, USE_GPIO_RST, SPI_SPEED_HZ, SPI_BUS, SPI_DEV
+    global SPI_SPEED_HZ, SPI_BUS, SPI_DEV
+    global TX_POWER_DBM
+    global LORA_INIT_ATTEMPTS
     global COUNT_PROJECT_DIR, COUNT_VENV_PYTHON, COUNT_SCRIPT_PATH
     global COUNT_ENGINE_PATH, COUNT_SOURCE_URL, COUNT_LOG_PATH
+    global COUNT_CSI_SENSOR_ID, COUNT_CSI_WIDTH, COUNT_CSI_HEIGHT
+    global COUNT_CSI_FPS, COUNT_CSI_FLIP, COUNT_NO_DISPLAY
+    global COUNT_DISPLAY_WIDTH, COUNT_DISPLAY_HEIGHT
     global COUNT_MAX_DURATION_SEC, COUNT_STOP_TIMEOUT_SEC
-    USE_RST_PULSE = args.reset_pulse or USE_RST_PULSE
-    USE_GPIO_RST = args.use_gpio_rst or USE_GPIO_RST
+    if (
+        args.use_gpio_rst
+        or args.rst_gpio_line is not None
+        or args.rst_gpio_chip is not None
+        or args.rst_gpio_offset is not None
+    ):
+        print(
+            "[GPIO] Aviso: --use-gpio-rst y --rst-gpio-* estan obsoletos y se ignoran. "
+            "El RST del SX1278 va puenteado a 3.3 V (pin 17) y el pin 29 queda libre."
+        )
+    LORA_INIT_ATTEMPTS = max(1, args.lora_init_attempts)
     SPI_SPEED_HZ = args.spi_speed
     SPI_BUS = args.spi_bus
     SPI_DEV = args.spi_dev
+    TX_POWER_DBM = min(max(args.tx_power, 2), 17)
     COUNT_SCRIPT_PATH = args.count_script
     COUNT_PROJECT_DIR = args.count_project_dir
     COUNT_VENV_PYTHON = args.count_python
     COUNT_ENGINE_PATH = args.count_engine
     COUNT_SOURCE_URL = args.count_source
+    COUNT_CSI_SENSOR_ID = args.count_csi_sensor_id
+    COUNT_CSI_WIDTH = args.count_csi_width
+    COUNT_CSI_HEIGHT = args.count_csi_height
+    COUNT_CSI_FPS = args.count_csi_fps
+    COUNT_CSI_FLIP = args.count_csi_flip
+    COUNT_NO_DISPLAY = not args.count_display
+    COUNT_DISPLAY_WIDTH = args.count_display_width
+    COUNT_DISPLAY_HEIGHT = args.count_display_height
     COUNT_LOG_PATH = args.count_log
     COUNT_MAX_DURATION_SEC = args.count_max_duration
     COUNT_STOP_TIMEOUT_SEC = args.count_stop_timeout
@@ -1242,10 +1643,16 @@ def main():
 
     try:
         print("Iniciando receptor LoRa en Jetson...")
+        try:
+            configure_secure_protocol()
+        except ValueError as exc:
+            print(f"No se pudo activar la seguridad IoT: {exc}")
+            print("Configura IOT_SHARED_SECRET con 64 caracteres hexadecimales.")
+            return
 
         if not rx.begin():
             print("No se pudo inicializar el SX1278.")
-            print("Causa probable: RST inestable o SPI demasiado rápido.")
+            print("Revisa el mensaje [SPI], [GPIO] o [LoRa] anterior para conocer la causa.")
             return
 
         print("SX1278 inicializado correctamente.")
@@ -1290,6 +1697,8 @@ def main():
         if count_controller.is_worker_alive():
             count_controller.stop(reason="controller_shutdown")
         count_controller.close_log_file()
+        if secure_protocol is not None:
+            secure_protocol.close()
         rx.close()
 
 

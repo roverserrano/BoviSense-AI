@@ -71,8 +71,23 @@ function requireRoles(allowedRoles = []) {
         const userData = userDoc.data() || {};
         const rol = normalizeRole(userData.rol);
         const estado = normalizeRole(userData.estado);
+        console.log('[AUTH] Usuario validado:', {
+            uid: decodedToken.uid,
+            email: decodedToken.email || '',
+            rol,
+            estado,
+        });
 
-        if (estado !== 'activo' || userData.operacion_pendiente) {
+        // Una operacion a medias bloquea el acceso igual que un usuario
+        // inactivo, pero el motivo debe ser distinguible: el administrador
+        // necesita saber que hay que reintentar la operacion.
+        if (userData.operacion_pendiente) {
+            return res.status(403).json({
+                message: 'Tu cuenta tiene una operación pendiente de un administrador.',
+            });
+        }
+
+        if (estado !== 'activo') {
             return res.status(403).json({
                 message: 'El usuario está inactivo.',
             });

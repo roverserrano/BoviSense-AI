@@ -45,7 +45,7 @@ El objetivo es claro: reducir errores manuales en conteos, detectar diferencias 
 ```text
 Flutter App (MVVM + Provider)
    |
-   |  HTTPS + Firebase ID Token
+   |  HTTP local de depuracion / HTTPS + Firebase ID Token
    v
 Node.js/Express API
    |
@@ -53,14 +53,18 @@ Node.js/Express API
    +--> Cloud Firestore (Usuarios, Configuración, Conteos, Alertas)
    +--> SMTP (envío de credenciales)
    |
-   +--> Integración con flujo IoT (ESP32/ESP8266/Jetson/LoRa)
+   +--> Flujo IoT firmado C1/R1
+          App --BLE--> ESP32 --LoRa 433 MHz--> Jetson SX1278
+          (la app solo muestra la respuesta despues de verificarla en el backend)
 ```
 
 ## Stack tecnológico
 
 - Frontend: Flutter, Provider, Firebase (Auth + Firestore), HTTP.
 - Backend: Node.js, Express, Firebase Admin SDK, Nodemailer.
-- IoT/Bridge: ESP32 BLE bridge, ESP8266 hotspot/descubrimiento UDP+HTTP, canal LoRa hacia Jetson.
+- IoT/Bridge: puente ESP32 BLE y LoRa 433 MHz hacia la Jetson, con comandos
+  firmados HMAC-SHA256 (`C1`) y respuestas firmadas (`R1`). El puente no conoce
+  la clave compartida.
 
 ## Estructura del repositorio
 
@@ -85,18 +89,22 @@ Node.js/Express API
 - `GET /configuracion`
 - `PUT /configuracion`
 - `GET /dispositivo`
-- `POST /conteos`
+- `POST /conteos` (exige la prueba final firmada de la sesión)
 - `GET /conteos`
 - `GET /conteos/:id`
 - `GET /alertas`
 - `PUT /alertas/:id/leer`
+- `POST /iot/comandos` (emite la trama `C1` firmada)
+- `POST /iot/respuestas` (verifica la trama `R1` firmada)
 
 ## Requisitos
 
 - Flutter SDK 3.10+ (recomendado canal estable).
-- Node.js 18+.
+- Node.js 22 a 24.
 - Proyecto Firebase configurado (Auth + Firestore).
 - Cuenta SMTP válida para envío de credenciales.
+- `IOT_SHARED_SECRET` (64 hexadecimales) idéntico en backend y Jetson, si se va
+  a usar el flujo de conteo real.
 - (Opcional) hardware IoT para pruebas de campo.
 
 ## Configuración y ejecución
@@ -127,6 +135,9 @@ SMTP_SECURE=false
 SMTP_USER=tu_usuario
 SMTP_PASS=tu_password
 SMTP_FROM="BoviSense <no-reply@tu-dominio.com>"
+
+IOT_DEVICE_ID=jetson-01
+IOT_SHARED_SECRET=<64 hexadecimales, nunca en Git>
 ```
 
 Iniciar servidor:
@@ -157,7 +168,42 @@ flutter pub get
 
 Configurar URL del backend en:
 
-`frontend/lib/core/config/app_config.dart`
+`frontend/lib/core/config/app_config.dart` (valor por defecto
+`http://127.0.0.1:3000`) o al compilar:
+
+**Telefono fisico por USB (recomendado).** `127.0.0.1` dentro del telefono es
+el telefono, no la laptop, asi que hay que publicar el puerto del backend con
+`adb reverse`. El script ya lo hace y luego arranca la app:
+
+```bash
+bash run_usb.sh
+```
+
+Equivale a:
+
+```bash
+adb reverse tcp:3000 tcp:3000
+flutter run
+```
+
+**Telefono en la misma red WiFi.** Compilar apuntando a la IP de la laptop
+(`ip -4 addr`), no a `127.0.0.1`:
+
+```bash
+flutter run --dart-define=API_BASE_URL=http://192.168.1.50:3000
+```
+
+Solo se acepta HTTP para hosts locales (bucle local y rangos privados); en
+release el trafico en claro queda bloqueado por el manifiesto Android.
+
+### Si la app muestra un error de conexion
+
+1. Confirmar que el backend responde: `curl http://127.0.0.1:3000/health`.
+2. Confirmar el tunel USB: `adb reverse --list` debe mostrar `tcp:3000 tcp:3000`.
+   Si no aparece, `adb reverse` se pierde al desconectar el cable o reiniciar el
+   telefono; volver a ejecutar `bash run_usb.sh`.
+3. Confirmar que el telefono tiene internet propio (WiFi o datos): Firebase Auth
+   y Firestore no pasan por `adb reverse`.
 
 Ejecutar app:
 

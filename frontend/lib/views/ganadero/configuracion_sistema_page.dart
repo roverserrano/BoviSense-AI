@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../data/models/configuracion_sistema_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
 import '../common/session_actions.dart';
 import 'ganadero_nav.dart';
@@ -20,6 +23,16 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
   final _cantidadEsperadaController = TextEditingController();
 
   bool _initialized = false;
+  bool _applyingConfig = false;
+  bool _hasUserEdited = false;
+  String? _appliedConfigKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _nombreFincaController.addListener(_markUserEdited);
+    _cantidadEsperadaController.addListener(_markUserEdited);
+  }
 
   @override
   void didChangeDependencies() {
@@ -27,11 +40,13 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
 
     if (_initialized) return;
     final vm = context.read<GanaderoViewModel>();
-    final config = vm.configuracion;
-
-    if (config != null) {
-      _nombreFincaController.text = config.nombreFinca;
-      _cantidadEsperadaController.text = config.cantidadEsperada.toString();
+    _applyConfig(vm.configuracion);
+    if (vm.dashboard == null && !vm.isLoadingDashboard) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(context.read<GanaderoViewModel>().loadDashboard());
+        }
+      });
     }
 
     _initialized = true;
@@ -39,9 +54,28 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
 
   @override
   void dispose() {
+    _nombreFincaController.removeListener(_markUserEdited);
+    _cantidadEsperadaController.removeListener(_markUserEdited);
     _nombreFincaController.dispose();
     _cantidadEsperadaController.dispose();
     super.dispose();
+  }
+
+  void _markUserEdited() {
+    if (!_applyingConfig) _hasUserEdited = true;
+  }
+
+  void _applyConfig(ConfiguracionSistemaModel? config) {
+    if (config == null) return;
+    final key = '${config.nombreFinca}|${config.cantidadEsperada}';
+    if (_appliedConfigKey == key || _hasUserEdited) return;
+
+    _applyingConfig = true;
+    _nombreFincaController.text = config.nombreFinca;
+    _cantidadEsperadaController.text = config.cantidadEsperada.toString();
+    _applyingConfig = false;
+    _hasUserEdited = false;
+    _appliedConfigKey = key;
   }
 
   Future<void> _save() async {
@@ -56,6 +90,7 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
     if (!mounted) return;
 
     if (ok) {
+      _hasUserEdited = false;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Configuración guardada correctamente.')),
       );
@@ -75,6 +110,7 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<GanaderoViewModel>();
+    _applyConfig(vm.configuracion);
 
     return Scaffold(
       appBar: GanaderoAppBar(
@@ -128,6 +164,9 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
                       final parsed = int.tryParse(value.trim());
                       if (parsed == null || parsed <= 0) {
                         return 'La cantidad debe ser mayor a cero';
+                      }
+                      if (parsed > 1000000) {
+                        return 'La cantidad no puede superar 1.000.000';
                       }
                       return null;
                     },
