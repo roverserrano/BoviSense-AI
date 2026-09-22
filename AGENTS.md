@@ -1,6 +1,6 @@
 # BoviSense-AI: contexto para continuar el desarrollo
 
-Actualizado: 2026-09-22 (sesion de continuacion: conteo, pruebas y documentacion; ver seccion 10). Este documento resume el estado observado en el repositorio y las pruebas locales anteriores. No sustituye una nueva verificacion en el hardware. **Trabajar solo en local:** el usuario no autoriza hospedaje ni despliegue hasta completar pruebas, QA y validacion de campo.
+Actualizado: 2026-09-22 (sesion de continuacion: conteo, pruebas, auditoria de las vistas de ganadero y administrador, presentacion e inicio de sesion). El trabajo de la sesion esta commiteado en la rama `dev` (ver secciones 20 y 21). Este documento resume el estado observado en el repositorio y las pruebas locales. No sustituye una nueva verificacion en el hardware. **Trabajar solo en local:** el usuario no autoriza hospedaje ni despliegue hasta completar pruebas, QA y validacion de campo.
 
 ## 1. Objetivo y arquitectura
 
@@ -72,7 +72,7 @@ No se debe iniciar manualmente otro receptor mientras el servicio esta activo. P
 3. **Firmware real del ESP32:** existe un sketch actualizado en el repositorio, pero no esta demostrado que esa misma version este grabada en el puente fisico. Comparar su version/log serie antes de concluir que cambios de software ya estan desplegados.
 4. **Calidad y tiempo de respuesta:** medir tiempos por tramo app->backend, BLE, LoRa, Jetson, retorno y verificacion bajo repeticion, interferencia/perdida, distancia real y bateria. La espera de 22/25 s es un limite, no una meta de experiencia. No prometer fiabilidad de produccion sin estas mediciones.
 5. **Android/seguridad:** en debug/profile se permite HTTP local; en release no. El proyecto Android aun usa `applicationId` de ejemplo y firma debug de release (`frontend/android/app/build.gradle.kts`), pendiente antes de publicar. Se observaron mensajes `GoogleApiManager SecurityException`, pero no hay evidencia de que causaran la falla SPI/LoRa.
-6. **Configuracion/documentacion obsoleta (atendido el 2026-09-22, ver seccion 10):** se corrigio el pinout al cableado vigente (VCC y RST a 3.3 V en el pin 17, DIO0 en el pin 31, pin 29 libre), `jetson/README.md` (rutas reales y uso del servicio), el README raiz, `comunicacion-iot/docs/*`, `comunicacion-iot/hardware/*` y `docs/seguridad-y-despliegue.md` (HTTP local de depuracion vs HTTPS de release). `frontend/lib/core/config/app_config.dart` quedo solo con `API_BASE_URL` y se retiraron los servicios ESP8266 de la app. `comunicacion-iot/docs/analisis-codigos-referencia.md` quedo marcado como historico. Pese a ello, contrastar siempre documento, codigo y cableado: `frontend/frontend.zip` (5.6 MB) y `firestore-debug.log` siguen sin seguimiento y no deben commitearse.
+6. **Configuracion/documentacion obsoleta (atendido el 2026-09-22, ver seccion 10):** se corrigio el pinout al cableado vigente (VCC y RST a 3.3 V en el pin 17, DIO0 en el pin 31, pin 29 libre), `jetson/README.md` (rutas reales y uso del servicio), el README raiz, `comunicacion-iot/docs/*`, `comunicacion-iot/hardware/*` y `docs/seguridad-y-despliegue.md` (HTTP local de depuracion vs HTTPS de release). `frontend/lib/core/config/app_config.dart` quedo solo con `API_BASE_URL` y se retiraron los servicios ESP8266 de la app. `comunicacion-iot/docs/analisis-codigos-referencia.md` quedo marcado como historico. Pese a ello, contrastar siempre documento, codigo y cableado. `firestore-debug.log` sigue en el arbol de trabajo (ignorado por Git) y no debe commitearse.
 7. **Secretos y datos en repo:** revisar con cuidado comentarios heredados, ficheros de configuracion y archivos no seguidos antes de compartir o crear commits. No copiar el secreto IoT ni credenciales de SSH/Firebase/SMTP a la documentacion. Rotar credenciales expuestas por canales inseguros antes de cualquier produccion.
 
 ## 7. Como reproducir en local
@@ -123,13 +123,13 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-a
   firebase emulators:exec --only auth,firestore --project demo-bovisense "npm --prefix backend run test:integration"
 ```
 
-Resultado de la ultima ejecucion (2026-09-22): `backend npm test` en verde, 5/5 integraciones backend contra emuladores, `flutter analyze` sin hallazgos, 13/13 tests Flutter y 17/17 tests Jetson. Siguen sin ser QA de campo.
+Resultado de la ultima ejecucion (2026-09-22, commit `7d10336`): `backend npm test` en verde (4 casos), **10/10** integraciones backend contra emuladores, `flutter analyze` sin hallazgos, **32/32** tests Flutter, **21/21** tests Jetson y APK de depuracion compilado. Siguen sin ser QA de campo.
 
 Secuencia recomendada antes de hospedar: (1) probar camara CSI y detector independientemente; (2) probar `H`, `S`, `Q`, `T`, `R` y persistencia de resultado en una sesion real; (3) repetir ante perdida de paquetes, reconexion BLE, reinicio Jetson/ESP32, usuario distinto y agotamiento de bateria; (4) medir latencias y porcentaje de exito; (5) validar datos en Firestore, historial/alertas y permisos; (6) completar tests y QA Android/release; (7) solo entonces decidir despliegue. Conservar trazas correlacionadas por `request_id` sin imprimir secretos.
 
 ## 9. Reglas de trabajo para el siguiente agente
 
-- Primero inspeccionar `git status --short`: el arbol estaba **sucio** al crear este traspaso, con muchos cambios modificados y archivos sin seguimiento (`comunicacion-iot/esp32/`, `jetson/secure_protocol.py`, `jetson/test_secure_protocol.py`, `docs/`, `firestore.rules`, entre otros). No hacer reset, checkout destructivo ni sobrescribir trabajo ajeno.
+- Primero inspeccionar `git status --short`. Al crear el traspaso el arbol estaba **sucio**; el 2026-09-22 todo el trabajo quedo commiteado en la rama `dev` (commit `7d10336`, secciones 20 y 21). Lo unico sin seguimiento es `revicion.txt`, una nota personal de trabajo que no forma parte de la aplicacion. No hacer reset, checkout destructivo ni sobrescribir trabajo ajeno; si aparecen cambios nuevos, son de otra sesion.
 - Tratar el repositorio como fuente de codigo y la Jetson/ESP32 como instalaciones que pueden tener versiones distintas. Un archivo copiado por `scp` no prueba que el proceso activo haya reiniciado ni que el ESP32 se haya reflasheado.
 - No tocar cableado ni forzar RST LOW sin acordarlo con el usuario. El RST del SX1278 va puenteado a 3.3 V (pin 17) y el pin 29 queda libre: nunca volver a cablear RST al 29. Confirmar una sola instancia del receptor antes de experimentar con radio.
 - Separar observacion de inferencia: mensajes `TxDone` solo son locales al SX1278; `R1 recibido` + verificacion backend en la app si evidencia recepcion y autenticacion. Registrar fechas y versiones en cada prueba.
@@ -809,7 +809,94 @@ ganadero. Antes, en administrador el retroceso cerraba la aplicacion sin avisar.
 
 ### Commit
 
-Todo el trabajo de esta sesion quedo en la rama `dev` en un unico commit
+Todo el trabajo de esta sesion quedo en la rama `dev` en el commit `7d10336`
 "Corrige flujo de conteo, alertas y vistas de ganadero y administrador"
-(93 archivos). Queda fuera del repositorio `revicion.txt`, que es una nota
-personal de trabajo: no esta versionado ni forma parte de la aplicacion.
+(93 archivos, 8462 inserciones). Queda fuera del repositorio `revicion.txt`, que
+es una nota personal de trabajo: no esta versionado ni forma parte de la
+aplicacion. El commit es local, no se ha empujado al remoto.
+
+## 21. Checklist para desplegar y validar esta version
+
+Orden recomendado. Cada paso incluye como comprobar que quedo aplicado; las
+secciones anteriores explican el porque de cada cambio.
+
+### 1. Backend (PC)
+
+```bash
+cd backend
+npm ci
+npm run dev                 # se recarga solo al guardar (node --watch)
+curl http://127.0.0.1:3000/health
+```
+
+- `/health` debe responder `200` con `firebase: ready`; `503` significa que
+  Firebase Auth/Firestore no responden.
+- Necesita `backend/.env` con credenciales de Firebase, `IOT_SHARED_SECRET`
+  (64 hexadecimales, igual al de la Jetson) y, si se usan avisos por correo,
+  `SMTP_*`.
+- Si el backend corre sin `--watch`, reiniciarlo despues de tocar
+  `iotService.js`, `ganaderoController.js` o `usuarioController.js`.
+
+### 2. App Android
+
+```bash
+cd frontend
+flutter pub get
+bash run_usb.sh             # adb reverse tcp:3000 + flutter run
+```
+
+- Cambios **solo en Dart**: basta *hot restart* (`R`) en la sesion de
+  `flutter run`.
+- Cambios **nativos** (`MainActivity.kt`, `AndroidManifest.xml`, recursos de
+  Android): hay que **reinstalar**; `flutter run` lo hace, un hot restart no.
+- Release: `flutter build apk --release --dart-define=API_BASE_URL=https://<dominio>`
+  (en release el trafico en claro esta bloqueado).
+- Comprobacion rapida: `adb reverse --list` debe mostrar `tcp:3000 tcp:3000`.
+
+### 3. Jetson
+
+```bash
+# desde el PC
+scp jetson/lora_jetson_rx.py jetson/secure_protocol.py \
+    cow@<ip-de-la-jetson>:/home/cow/Documents/Script/
+# en la Jetson
+sudo systemctl daemon-reload
+sudo systemctl restart bovisense-lora
+sudo journalctl -u bovisense-lora -f
+sudo fuser -v /dev/spidev0.0     # un solo proceso sobre el SX1278
+```
+
+- El arranque debe imprimir `[GPIO] Cableado confirmado: VCC y RST del SX1278 a
+  3.3 V (pin 17), DIO0 en pin 31` y **ningun** mensaje de `libgpiod` ni
+  `Jetson.GPIO`.
+- Si cambio `jetson/run_bovino.py`, copiarlo tambien (es el worker de
+  inferencia) y reiniciar el servicio.
+- El drop-in `jetson/systemd/unbuffered.conf` vive en
+  `/etc/systemd/system/bovisense-lora.service.d/`.
+
+### 4. Validacion en campo (lo que aun falta y no cubren las pruebas)
+
+1. Camara CSI: correr el worker solo, sin radio, y confirmar que abre la camara
+   y publica `COUNT_UPDATE` / `COUNT_FINAL`.
+2. Sesion completa `H -> S -> Q -> T -> R` con conteo real, guardado, historial
+   y alerta generada.
+3. Alertas: abrir la pestana Historial, ver el aviso del panel y marcar una
+   alerta como leida.
+4. Bluetooth: probar con Bluetooth apagado (debe pedir activarlo), con el
+   permiso denegado, con audifonos o parlantes conectados y con el equipo
+   apagado; cada caso debe dar un mensaje distinto.
+5. Reconexion: alejarse del puente, apagar el ESP32, reiniciar la Jetson,
+   bloquear el telefono y volver a la app.
+6. Medir latencias por tramo (app, BLE, LoRa, Jetson, backend) y tasa de exito;
+   anotar fecha y version de cada archivo desplegado.
+
+### 5. Antes de publicar (pendientes conocidos)
+
+- `applicationId` definitivo y firma de release en
+  `frontend/android/app/build.gradle.kts`; cambiar el `applicationId` obliga a
+  actualizar `google-services.json` y el registro en Firebase.
+- Rotar credenciales: la clave del hotspot que estuvo en el arbol de trabajo y
+  `IOT_SHARED_SECRET` si alguna vez se compartio por un canal inseguro.
+- Revisar el archivo `.codex` de la raiz (ignorado por Git): guarda contexto
+  heredado con credenciales del hotspot.
+- `firestore.rules` y `firebase.json` siguen **sin desplegar**.
