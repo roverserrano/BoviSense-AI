@@ -11,7 +11,11 @@ process.env.IOT_SHARED_SECRET = '11'.repeat(32);
 // Nunca enviar correos reales desde las pruebas: con la configuracion vacia el
 // servicio falla rapido y la API responde con activation_pending.
 for (const name of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM']) process.env[name] = '';
+// La suite completa hace muchas peticiones desde la misma IP; se eleva el
+// limite para que el resultado no dependa del rate limit.
+process.env.RATE_LIMIT_MAX = '100000';
 const { auth, db, FieldValue } = require('../../src/config/firebaseAdmin');
+const { Timestamp } = require('firebase-admin/firestore');
 const { sign } = require('../../src/services/iotProtocol');
 const { createUserService } = require('../../src/services/userService');
 const app = require('../../src/app');
@@ -287,6 +291,95 @@ test('a pending operation blocks access with a distinguishable message', async (
 
     await db.doc('Usuarios/user-test').update({ operacion_pendiente: FieldValue.delete() });
     assert.equal((await call('/api/ganadero/dashboard', userToken)).status, 200);
+});
+
+test('legacy collections are merged without duplicating records', async () => {
+    const token = await account('legacy-merge-test');
+    await call('/api/ganadero/configuracion', token, 'PUT', { nombre_finca: 'Campo Viejo', cantidad_esperada: 20 });
+
+    // Conteo guardado por la via nueva (subcoleccion del usuario). El timestamp
+    // debe caer dentro de la ventana que valida el backend (±5 s del ticket).
+    const newCountId = await saveCount(token, 18, Math.floor(Date.now() / 1000) - 4);
+
+    // Datos de la etapa anterior en las colecciones de nivel raiz.
+    const legacyStart = new Date(Date.now() - 3600 * 1000);
+    await db.doc('Conteos/legacy-count').set({
+        uid: 'legacy-merge-test',
+        fecha_hora_inicio: Timestamp.fromDate(legacyStart),
+        fecha_hora_fin: Timestamp.fromDate(new Date(legacyStart.getTime() + 60000)),
+        cantidad_detectada: 15,
+        cantidad_esperada: 20,
+        diferencia: -5,
+        estado_conteo: 'finalizado',
+        origen: 'legacy',
+        resumen: 'Conteo historico',
+    });
+    await db.doc('Alertas/legacy-alert').set({
+        uid: 'legacy-merge-test',
+        mensaje: 'Se detectó un faltante de 5 animales respecto a la cantidad esperada.',
+        tipo: 'faltante',
+        nivel: 'media',
+        leida: false,
+        fecha_hora: Timestamp.fromDate(legacyStart),
+    });
+    // El mismo id en ambas ubicaciones no debe aparecer dos veces.
+    await db.doc(`Conteos/${newCountId}`).set({
+        uid: 'legacy-merge-test',
+        fecha_hora_inicio: Timestamp.fromDate(legacyStart),
+        cantidad_detectada: 1,
+        cantidad_esperada: 20,
+        diferencia: -19,
+        estado_conteo: 'finalizado',
+        origen: 'legacy_duplicado',
+    });
+
+    const listado = await call('/api/ganadero/conteos', token);
+    assert.deepEqual(
+        listado.body.conteos.map(conteo => conteo.id),
+        [newCountId, 'legacy-count'],
+        'orden descendente por fecha y sin duplicar el id presente en ambas colecciones',
+    );
+    assert.equal(listado.body.conteos[0].cantidad_detectada, 18, 'gana la version de la subcoleccion');
+    assert.equal(listado.body.next_cursor, null);
+
+    const alertas = await call('/api/ganadero/alertas', token);
+    assert.equal(alertas.body.alertas.length, 2, 'alerta nueva mas alerta heredada');
+    assert.equal((await call('/api/ganadero/alertas/legacy-alert/leer', token, 'PUT')).status, 200);
+
+    const dashboard = await call('/api/ganadero/dashboard', token);
+    // El listado deduplica por id, pero el contador del dashboard suma documentos
+    // por coleccion (1 en la subcoleccion + 2 en la heredada). Es el comportamiento
+    // actual y queda registrado como observacion C-14 en docs/planning.
+    assert.equal(dashboard.body.cantidad_conteos, 3, 'contador por documentos, sin deduplicar ids');
+});
+
+test('tracing, rate limit headers, body limit and malformed JSON', async () => {
+    const health = await fetch(`${base}/health`, { headers: { 'x-request-id': 'trace-check-1' } });
+    assert.equal(health.status, 200);
+    assert.equal(health.headers.get('x-request-id'), 'trace-check-1', 'debe respetar el request id recibido');
+    assert.equal(health.headers.get('cache-control'), 'no-store');
+    const rateHeaders = [
+        health.headers.get('ratelimit'),
+        health.headers.get('ratelimit-limit'),
+        health.headers.get('x-ratelimit-limit'),
+    ].filter(Boolean).join(' ');
+    assert.match(rateHeaders, /limit=/i, 'debe informar el limite de tasa configurado');
+
+    const generated = await fetch(`${base}/health`);
+    assert.ok((generated.headers.get('x-request-id') || '').length > 0, 'debe generar un request id');
+
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` };
+    const tooLarge = await fetch(`${base}/api/ganadero/iot/comandos`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ command: 'ESTADO', request_id: 'a'.repeat(32), pad: 'x'.repeat(20000) }),
+    });
+    assert.equal(tooLarge.status, 413, 'un cuerpo mayor a 16 kb se rechaza');
+
+    const malformed = await fetch(`${base}/api/ganadero/iot/comandos`, { method: 'POST', headers, body: '{' });
+    assert.equal(malformed.status, 400, 'un JSON invalido se rechaza con 400');
+
+    assert.equal((await call('/api/ruta/inexistente', userToken)).status, 404);
 });
 
 test('an alert from the legacy collection can be marked as read', async () => {

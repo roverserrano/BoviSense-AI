@@ -7,6 +7,7 @@ import signal
 import argparse
 import threading
 import json
+import inspect
 import numpy as np
 import tensorrt as trt
 
@@ -1051,11 +1052,69 @@ def descriptor_similarity(desc_a, desc_b):
     return max(0.0, min(1.0, value))
 
 
+def bbox_min_side(box):
+    """Lado menor de una caja (x1, y1, x2, y2)."""
+    x1, y1, x2, y2 = (float(value) for value in box[:4])
+    return max(0.0, min(x2 - x1, y2 - y1))
+
+
+def filter_small_detections(detections, min_box_px=0.0):
+    """Descarta detecciones mas pequenas que min_box_px.
+
+    A 20-30 m de altitud una vaca ocupa decenas de pixeles, asi que las cajas
+    diminutas suelen ser ruido (pasto, sombras, reflejos). Filtrarlas antes del
+    tracker evita crear IDs falsos que despues se contarian como animales.
+    Con min_box_px <= 0 el filtro queda desactivado: comportamiento previo.
+    """
+    threshold = float(min_box_px or 0.0)
+    if threshold <= 0.0 or not detections:
+        return detections
+    return [det for det in detections if bbox_min_side(det) >= threshold]
+
+
+def package_version(module):
+    return str(getattr(module, "__version__", "desconocida"))
+
+
+def supported_kwargs(target, candidates):
+    """Separa los kwargs que la version instalada realmente acepta.
+
+    El paquete de tracking cambia nombres de parametros entre versiones. Si se
+    pasara un kwarg inexistente, el constructor lanzaria TypeError y el sistema
+    seguiria con el tracker interno sin que el usuario lo note. Filtrar por
+    firma evita esa degradacion silenciosa y deja constancia en el log.
+    """
+    try:
+        parameters = inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        return dict(candidates), []
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return dict(candidates), []
+    applied = {
+        key: value for key, value in candidates.items() if key in parameters
+    }
+    dropped = sorted(key for key in candidates if key not in parameters)
+    return applied, dropped
+
+
 class LegacyUniqueBovineTracker:
-    def __init__(self, max_missed=20, min_iou=0.10, max_distance=120.0):
+    def __init__(
+        self,
+        max_missed=20,
+        min_iou=0.10,
+        max_distance=120.0,
+        min_box_px=0.0,
+    ):
         self.max_missed = int(max_missed)
         self.min_iou = float(min_iou)
         self.max_distance = float(max_distance)
+        # 0 desactiva el filtro: con 0 el comportamiento es el de siempre.
+        self.min_box_px = float(min_box_px)
+        self.engine_name = "legacy_internal"
+        self.package_versions = {}
         self.next_track_id = 1
         self.total_count = 0
         self.tracks = {}
@@ -1095,6 +1154,7 @@ class LegacyUniqueBovineTracker:
         return iou - (dist / max(self.max_distance, 1.0)) * 0.05
 
     def update(self, detections, frame=None):
+        detections = filter_small_detections(detections, self.min_box_px)
         track_ids = list(self.tracks.keys())
         unmatched_tracks = set(track_ids)
         unmatched_detections = set(range(len(detections)))
@@ -1147,6 +1207,7 @@ class LegacyUniqueBovineTracker:
 
     def summary_fields(self):
         fields = dict(self.stats)
+        fields["engine"] = self.engine_name
         fields["unique_bovines"] = self.total_count
         return fields
 
@@ -1163,6 +1224,7 @@ class PersistentBovineTracker:
         match_thresh=0.10,
         gmc_method="orb",
         verbose_tracking=False,
+        min_box_px=0.0,
     ):
         self.max_missed = int(max_missed)
         self.min_iou = float(min_iou)
@@ -1171,12 +1233,21 @@ class PersistentBovineTracker:
         self.track_high_thresh = float(track_high_thresh)
         self.track_low_thresh = float(track_low_thresh)
         self.match_thresh = float(match_thresh)
+        self.min_box_px = float(min_box_px)
+        self.engine_name = "internal_persistent"
+        self.package_versions = {}
         self.next_track_id = 1
         self.total_count = 0
         self.tracks = {}
         self.counted_track_ids = set()
         self.gmc = ORBGlobalMotionCompensator() if gmc_method == "orb" else None
         self.gmc_method = gmc_method
+        if gmc_method not in ("orb", "none"):
+            print(
+                f"[TRACKER] El tracker interno solo implementa GMC con ORB; "
+                f"se ignora gmc={gmc_method}. Usa --tracker botsort para ECC.",
+                flush=True,
+            )
         self.verbose_tracking = bool(verbose_tracking)
         self.stats = {
             "tracks_created": 0,
@@ -1265,6 +1336,9 @@ class PersistentBovineTracker:
             det for det in detections
             if float(det[4]) >= self.track_low_thresh
         ]
+        usable_detections = filter_small_detections(
+            usable_detections, self.min_box_px
+        )
 
         track_ids = [
             track_id for track_id, track in self.tracks.items()
@@ -1335,6 +1409,7 @@ class PersistentBovineTracker:
 
     def summary_fields(self):
         fields = dict(self.stats)
+        fields["engine"] = self.engine_name
         fields["unique_bovines"] = self.total_count
         return fields
 
@@ -1357,12 +1432,37 @@ class RoboflowBoTSORTBovineTracker:
         lost_track_max_seconds=5.0,
         lost_track_prediction="hold",
         verbose_tracking=False,
+        min_box_px=0.0,
+        tracker_kind="botsort",
     ):
         import supervision as sv
-        from trackers import BoTSORTTracker
+        import trackers as trackers_pkg
+
+        tracker_classes = {
+            "botsort": "BoTSORTTracker",
+            "bytetrack": "ByteTrackTracker",
+            "ocsort": "OCSORTTracker",
+        }
+        class_name = tracker_classes.get(str(tracker_kind).lower(), "BoTSORTTracker")
+        tracker_class = getattr(trackers_pkg, class_name, None)
+        if tracker_class is None:
+            available = ", ".join(
+                name for name in dir(trackers_pkg) if name.endswith("Tracker")
+            )
+            raise RuntimeError(
+                f"{class_name} no existe en la version instalada de trackers. "
+                f"Disponibles: {available or 'ninguna'}"
+            )
 
         self.sv = sv
+        self.tracker_kind = str(tracker_kind).lower()
+        self.engine_name = f"roboflow_{self.tracker_kind}"
+        self.package_versions = {
+            "trackers": package_version(trackers_pkg),
+            "supervision": package_version(sv),
+        }
         self.track_low_thresh = float(track_low_thresh)
+        self.min_box_px = float(min_box_px)
         self.identity_counted_ids = set()
         self.visible_track_ids = set()
         self.lost_track_ids = set()
@@ -1390,29 +1490,71 @@ class RoboflowBoTSORTBovineTracker:
             "reid_matches": 0,
             "reid_rejects": 0,
             "lost_display_frames": 0,
+            "counts_accepted": 0,
+            "count_rejected_already": 0,
         }
 
-        self.tracker = BoTSORTTracker(
-            lost_track_buffer=int(track_buffer),
-            frame_rate=float(frame_rate),
-            track_activation_threshold=float(track_high_thresh),
-            minimum_consecutive_frames=max(1, int(track_min_hits)),
-            minimum_iou_threshold_first_assoc=float(match_thresh),
-            minimum_iou_threshold_second_assoc=float(max(track_min_iou, match_thresh)),
-            minimum_iou_threshold_unconfirmed_assoc=float(max(track_min_iou, match_thresh)),
-            high_conf_det_threshold=float(track_high_thresh),
-            enable_cmc=self.enable_cmc,
-            cmc_method="orb" if gmc_method == "orb" else "sparseOptFlow",
-            cmc_downscale=2,
-            instant_first_frame_activation=False,
+        requested_cmc = str(gmc_method).lower().strip()
+        if not self.enable_cmc:
+            cmc_method = "none"
+        elif requested_cmc in ("orb", "ecc", "sparseoptflow"):
+            cmc_method = requested_cmc
+        else:
+            print(
+                f"[TRACKER] Metodo de GMC desconocido ({gmc_method}); se usa orb.",
+                flush=True,
+            )
+            cmc_method = "orb"
+
+        candidate_kwargs = {
+            "lost_track_buffer": int(track_buffer),
+            "frame_rate": float(frame_rate),
+            "track_activation_threshold": float(track_high_thresh),
+            "minimum_consecutive_frames": max(1, int(track_min_hits)),
+            "minimum_iou_threshold_first_assoc": float(match_thresh),
+            "minimum_iou_threshold_second_assoc": float(
+                max(track_min_iou, match_thresh)
+            ),
+            "minimum_iou_threshold_unconfirmed_assoc": float(
+                max(track_min_iou, match_thresh)
+            ),
+            "high_conf_det_threshold": float(track_high_thresh),
+            "enable_cmc": self.enable_cmc,
+            "cmc_method": cmc_method,
+            "cmc_downscale": 2,
+            "instant_first_frame_activation": False,
+        }
+        tracker_kwargs, dropped_kwargs = supported_kwargs(
+            tracker_class, candidate_kwargs
         )
+        self.tracker = tracker_class(**tracker_kwargs)
+        self.dropped_kwargs = dropped_kwargs
         print(
-            f"[TRACKER] BoT-SORT activo: cmc={self.enable_cmc} "
+            f"[TRACKER] {class_name} activo ({self.engine_name}): cmc={self.enable_cmc} "
             f"method={gmc_method} buffer={track_buffer} min_hits={track_min_hits} "
             f"reid={self.reid_enabled} lost_display={self.show_lost_tracks} "
             f"lost_prediction={self.lost_track_prediction}",
             flush=True,
         )
+        print(
+            f"[TRACKER] Motores: trackers={self.package_versions['trackers']} "
+            f"supervision={self.package_versions['supervision']} "
+            f"frame_rate={float(frame_rate):.1f} min_box_px={self.min_box_px:.1f}",
+            flush=True,
+        )
+        if dropped_kwargs:
+            print(
+                "[TRACKER] La version instalada no acepta estos parametros "
+                f"(se usan sus valores por defecto): {', '.join(dropped_kwargs)}",
+                flush=True,
+            )
+        if self.reid_enabled:
+            print(
+                "[TRACKER] Memoria de identidad activa: reduce el doble conteo cuando se "
+                "pierde un track, pero puede fusionar dos animales distintos y subcontar. "
+                "Comparar en campo con --no-reid.",
+                flush=True,
+            )
 
     def _event(self, name, **fields):
         quiet_events = {
@@ -1574,6 +1716,7 @@ class RoboflowBoTSORTBovineTracker:
             det for det in detections
             if float(det[4]) >= self.track_low_thresh
         ]
+        usable = filter_small_detections(usable, self.min_box_px)
         if not usable:
             try:
                 return self.sv.Detections.empty()
@@ -1596,10 +1739,12 @@ class RoboflowBoTSORTBovineTracker:
     def _count_confirmed_track(self, track_id):
         identity_id = self.track_to_identity.get(track_id, track_id)
         if identity_id in self.identity_counted_ids:
+            self.stats["count_rejected_already"] += 1
             self._event("COUNT_REJECTED_ALREADY_COUNTED", track_id=track_id, identity_id=identity_id)
             return
         self.identity_counted_ids.add(identity_id)
         self.total_count += 1
+        self.stats["counts_accepted"] += 1
         print(
             f"COUNT_ACCEPTED|track_id={track_id}|identity_id={identity_id}|"
             f"count={self.total_count}",
@@ -1765,12 +1910,17 @@ class RoboflowBoTSORTBovineTracker:
 
     def summary_fields(self):
         return {
+            "engine": self.engine_name,
+            "trackers_version": self.package_versions.get("trackers", "-"),
+            "supervision_version": self.package_versions.get("supervision", "-"),
             "tracks_created": self.stats["tracks_created"],
             "tracks_recovered": self.stats["tracks_recovered"],
             "tracks_removed": self.stats["tracks_removed"],
             "reid_matches": self.stats["reid_matches"],
             "reid_rejects": self.stats["reid_rejects"],
             "lost_display_frames": self.stats["lost_display_frames"],
+            "counts_accepted": self.stats["counts_accepted"],
+            "count_rejected_already": self.stats["count_rejected_already"],
             "unique_bovines": self.total_count,
         }
 
@@ -1793,16 +1943,19 @@ def create_tracker(
     lost_track_max_seconds,
     lost_track_prediction,
     verbose_tracking,
+    min_box_px=0.0,
 ):
+    tracker_name = str(tracker_name).lower().strip()
     if tracker_name == "none":
         print("[TRACKER] Modo legacy activado: conteo inmediato por track nuevo")
         return LegacyUniqueBovineTracker(
             max_missed=track_buffer,
             min_iou=track_min_iou,
             max_distance=track_max_distance,
+            min_box_px=min_box_px,
         )
 
-    if tracker_name == "botsort":
+    if tracker_name in ("botsort", "bytetrack", "ocsort"):
         try:
             return RoboflowBoTSORTBovineTracker(
                 track_buffer=track_buffer,
@@ -1820,11 +1973,14 @@ def create_tracker(
                 lost_track_max_seconds=lost_track_max_seconds,
                 lost_track_prediction=lost_track_prediction,
                 verbose_tracking=verbose_tracking,
+                min_box_px=min_box_px,
+                tracker_kind=tracker_name,
             )
         except Exception as exc:
             print(
-                "[TRACKER] No se pudo activar BoT-SORT real "
-                f"({type(exc).__name__}: {exc}); usando tracker simple interno",
+                f"[TRACKER] No se pudo activar {tracker_name} real "
+                f"({type(exc).__name__}: {exc}); se usa el tracker interno "
+                "(sin GMC de libreria) para no detener el conteo",
                 flush=True,
             )
     else:
@@ -1840,6 +1996,7 @@ def create_tracker(
         match_thresh=match_thresh,
         gmc_method=gmc_method,
         verbose_tracking=verbose_tracking,
+        min_box_px=min_box_px,
     )
 
 
@@ -2040,6 +2197,7 @@ def infer_worker(
     lost_track_max_seconds,
     lost_track_prediction,
     verbose_tracking,
+    min_box_px,
     display_enabled,
     export_detections_path=None,
     save_detection_frames_dir=None,
@@ -2076,6 +2234,7 @@ def infer_worker(
             lost_track_max_seconds=lost_track_max_seconds,
             lost_track_prediction=lost_track_prediction,
             verbose_tracking=verbose_tracking,
+            min_box_px=min_box_px,
         )
         if export_detections_path or save_detection_frames_dir:
             detection_exporter = DetectionExporter(
@@ -2100,6 +2259,7 @@ def infer_worker(
         inference_ms_sum = 0.0
         tracking_ms_sum = 0.0
         total_ms_sum = 0.0
+        frame_rate_warned = False
         processed_frames = 0
 
         while not stop_event.is_set():
@@ -2159,6 +2319,25 @@ def infer_worker(
                 last_status_at = now
             if now - last_metric_at >= 5.0:
                 sample_count = max(metric_samples, 1)
+                # El buffer de tracks se mide en frames y la libreria lo escala
+                # por frame_rate/30. Si el pipeline procesa a otro ritmo, el
+                # buffer dura mas o menos segundos de lo previsto.
+                if (
+                    not frame_rate_warned
+                    and fps > 0.0
+                    and tracker_frame_rate
+                    and abs(fps - float(tracker_frame_rate))
+                    > 0.35 * float(tracker_frame_rate)
+                ):
+                    frame_rate_warned = True
+                    print(
+                        "TRACK_WARN|frame_rate_mismatch|"
+                        f"pipeline_fps={fps:.2f}|"
+                        f"tracker_frame_rate={float(tracker_frame_rate):.1f}|"
+                        "detail=ajusta --tracker-frame-rate al FPS real de "
+                        "procesamiento para que el buffer dure lo previsto",
+                        flush=True,
+                    )
                 print(
                     f"TRACK_METRIC|tracker={tracker_name}|active={visible_tracks}|"
                     f"occluded={occluded_tracks}|"
@@ -2341,8 +2520,31 @@ def main():
     parser.add_argument(
         "--tracker",
         default="botsort",
-        choices=["simple", "botsort", "none"],
-        help="Tracker: botsort usa Roboflow Trackers si esta instalado; simple usa persistencia interna; none usa comportamiento legacy.",
+        choices=["simple", "botsort", "bytetrack", "ocsort", "none"],
+        help=(
+            "Tracker posterior a la deteccion: botsort (con GMC, recomendado "
+            "para dron), bytetrack y ocsort (comparacion, sin GMC), simple "
+            "(persistencia interna) o none (comportamiento legacy sin tracking)."
+        ),
+    )
+    parser.add_argument(
+        "--tracker-frame-rate",
+        type=float,
+        default=None,
+        help=(
+            "FPS que veras el tracker; por defecto usa --csi-fps. Ponlo al FPS "
+            "real de procesamiento: el buffer de tracks se escala con este valor."
+        ),
+    )
+    parser.add_argument(
+        "--min-box-px",
+        type=float,
+        default=0.0,
+        help=(
+            "Descarta detecciones cuyo lado menor en pixeles sea menor a este "
+            "valor (0 lo desactiva). Reduce ruido lejano: en tomas desde 20-30 m "
+            "un valor de 10-15 suele ser razonable."
+        ),
     )
     parser.add_argument(
         "--track-max-missed",
@@ -2395,7 +2597,7 @@ def main():
     parser.add_argument(
         "--gmc",
         default="orb",
-        choices=["orb", "none"],
+        choices=["orb", "ecc", "sparseOptFlow", "none"],
         help="Compensación de movimiento global para cámara móvil",
     )
     parser.add_argument(
@@ -2485,7 +2687,7 @@ def main():
             args.track_buffer,
             args.match_thresh,
             args.gmc,
-            args.csi_fps,
+            args.tracker_frame_rate or args.csi_fps,
             args.reid,
             args.reid_max_seconds,
             args.reid_threshold,
@@ -2493,6 +2695,7 @@ def main():
             args.lost_track_max_seconds,
             args.lost_track_prediction,
             args.verbose_tracking,
+            args.min_box_px,
             not args.no_display,
             args.export_detections,
             args.save_detection_frames,

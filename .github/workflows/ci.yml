@@ -1,0 +1,92 @@
+name: CI
+
+# Ejecuta las suites que corren sin hardware ni secretos.
+# La validacion en campo (camara, radio, telefono) es manual: ver AGENTS.md §21.
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend (unitarias)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Instalar dependencias
+        working-directory: backend
+        run: npm ci
+      - name: Pruebas unitarias
+        working-directory: backend
+        run: npm test
+      - name: Sintaxis de los archivos modificados
+        run: find backend -name '*.js' -not -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+
+  backend-integration:
+    name: Backend (integracion con emuladores)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Instalar dependencias del backend
+        working-directory: backend
+        run: npm ci
+      - name: Instalar firebase-tools
+        run: npm install --global firebase-tools
+      - name: Pruebas de integracion (Auth + Firestore)
+        run: |
+          firebase emulators:exec --only auth,firestore --project demo-bovisense \
+            "npm --prefix backend run test:integration"
+
+  frontend:
+    name: App Flutter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Dependencias
+        working-directory: frontend
+        run: flutter pub get
+      - name: Analisis estatico
+        working-directory: frontend
+        run: flutter analyze
+      - name: Pruebas
+        working-directory: frontend
+        run: flutter test
+
+  jetson:
+    name: Jetson (receptor y tracking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Dependencias de prueba
+        run: pip install numpy opencv-python-headless
+      - name: Sintaxis
+        working-directory: jetson
+        run: python -m py_compile lora_jetson_rx.py run_bovino.py secure_protocol.py
+      - name: Protocolo seguro y control de radio
+        working-directory: jetson
+        run: python -m unittest test_secure_protocol.py
+      - name: Logica de tracking y conteo
+        working-directory: jetson
+        run: python -m unittest test_tracking_logic.py

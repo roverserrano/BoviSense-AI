@@ -2,11 +2,12 @@
 .codex
 .metadata
 /backend/aplicacion-cabfa-firebase-adminsdk-*.json
-/backend/google-services.json
 pasos.txt
 revicion.txt
-AGENTS.md
 node_modules/
 *-debug.log
 .firebase/
 __pycache__/
+# Nota (2026-10-12): AGENTS.md y los google-services.json se versionan a
+# proposito (documentacion de traspaso y configuracion publica de cliente
+# Firebase). Las reglas de ignore no aplican a archivos ya rastreados.

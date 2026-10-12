@@ -16,7 +16,7 @@ app.use(helmet());
 const origins = (process.env.CORS_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
 app.use(cors({ origin: (origin, callback) => callback(null, !origin || origins.includes(origin)) }));
 app.use(rateLimit({
-    windowMs: 60000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false,
+    windowMs: 60000, limit: Number(process.env.RATE_LIMIT_MAX || 120), standardHeaders: 'draft-7', legacyHeaders: false,
     message: { message: 'Demasiadas solicitudes. Intenta nuevamente en un minuto.' },
 }));
 app.use(express.json({ limit: '16kb', strict: true }));

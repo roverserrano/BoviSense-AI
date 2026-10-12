@@ -900,3 +900,123 @@ sudo fuser -v /dev/spidev0.0     # un solo proceso sobre el SX1278
 - Revisar el archivo `.codex` de la raiz (ignorado por Git): guarda contexto
   heredado con credenciales del hotspot.
 - `firestore.rules` y `firebase.json` siguen **sin desplegar**.
+
+## 22. Documentacion tecnica generada (2026-10-12)
+
+Se documento el proyecto completo con las skills `acquire-codebase-knowledge` y
+`architecture-blueprint-generator` (la skill `documentation-writer` que pidio el
+usuario **no esta instalada** en el repositorio, por lo que la redaccion se hizo
+con las otras dos mas criterio propio). El punto de entrada es `docs/README.md`,
+que enlaza:
+
+- `docs/codebase/` — los siete documentos obligatorios de la skill: `STACK.md`,
+  `STRUCTURE.md`, `ARCHITECTURE.md`, `CONVENTIONS.md`, `INTEGRATIONS.md`,
+  `TESTING.md`, `CONCERNS.md`, mas la salida cruda del escaner
+  (`.codebase-scan.txt`).
+- `docs/arquitectura/` — `blueprint.md` (arquitectura completa con ADR y guia de
+  extension), `modulos.md`, `diagramas.md` (C4, componentes, secuencia, estados y
+  despliegue en Mermaid), `api-http.md`, `integraciones-iot.md`,
+  `flujos-datos.md`, `despliegue.md` y `desarrollo.md`.
+
+Marcadores usados: `PENDIENTE DE VERIFICACIÓN` (no comprobable desde el
+repositorio) y `[ASK USER]` (decision de equipo). El analisis no modifico codigo
+de la aplicacion ni `docs/seguridad-y-despliegue.md`. Hallazgos nuevos de esta
+revision que conviene atender: `backend/src/routes/usuarioRoute.js` no esta
+montado (evidencia: `backend/src/app.js:59` monta `usuarioRoutes.js`),
+`comunicacion-iot/shared/` pertenece a la etapa JSON/WebSocket descartada, y los
+dos `google-services.json` estan versionados mientras `.env` y la cuenta de
+servicio estan correctamente ignorados.
+
+## 23. Ejecucion del plan consolidado (2026-10-12)
+
+El usuario aprobo el plan de `docs/planning/` y se ejecutaron las fases que no
+requieren hardware.
+
+### Cambios realizados
+
+1. **F1 - cerrado el acceso sin autenticar del receptor (critico).**
+   `jetson/lora_jetson_rx.py` aceptaba tramas sin firma (`BRIDGE|...`, `CMD:...`)
+   y las ejecutaba sobre el controlador de sesion, respondiendo
+   `RESP|...|JETSON_COUNT|...` sin HMAC. Ese camino es alcanzable por cualquier
+   emisor LoRa cercano. Se elimino el despacho heredado completo y los helpers
+   que solo el usaba (`build_count_response`, `build_jetson_status_response`,
+   `clean_field`, `read_power_mode`, `read_uptime`, `read_cpu_temp`,
+   `read_memory`, `read_load_average` y el import de `socket`). Ahora cualquier
+   trama que no empiece por `C1|` se registra y se descarta. Prueba de regresion:
+   `test_unsigned_frames_never_execute_commands`.
+2. **F2 - higiene de secretos y configuracion.** Se redactaron las dos
+   credenciales en claro de `pasos.txt` y la contrasena del hotspot en `.codex`
+   (archivos locales ignorados por Git), sustituyendolas por un marcador de
+   redaccion. Barrido posterior (`ghp_`, `sk-`, `AKIA`, claves privadas y
+   cadenas de 64 hex) sin hallazgos: los unicos 64-hex son hashes de
+   `skills-lock.json` y `pubspec.lock`. Se limpio `.gitignore` de reglas sin
+   efecto (`AGENTS.md` y `/backend/google-services.json`) y se documento por que
+   se versionan. **Falta que el usuario rote las credenciales.**
+3. **F6 - cobertura de pruebas.** Nueva suite `jetson/test_tracking_logic.py`
+   (9 casos: filtro de cajas pequenas, filtrado de kwargs por firma, conteo por
+   identidad en los trackers interno y legacy, seleccion de motor con
+   degradacion explicita y verificacion del GMC con camara en movimiento). Nuevas
+   pruebas de integracion del backend: mezcla de colecciones heredadas sin
+   duplicar ids y manejo de trazas, limite de cuerpo y JSON invalido.
+4. **F7 - integracion continua.** `.github/workflows/ci.yml` con cuatro jobs
+   (backend unitario, integracion con emuladores, Flutter y Jetson). No necesita
+   secretos: los emuladores se inicializan con `demo-bovisense` y el propio test
+   anula SMTP.
+5. **Ajuste de soporte:** el limite de tasa ahora es configurable con
+   `RATE_LIMIT_MAX` (120 por defecto). Motivo: la suite de integracion hace
+   muchas peticiones desde la misma IP y el valor fijo hacia el resultado
+   dependiente del limite.
+6. **Trazabilidad:** se actualizaron `docs/planning/*` (estados de requisitos,
+   tareas y conflictos) y `docs/codebase/TESTING.md` con los conteos reales.
+
+### Archivos modificados
+
+- `jetson/lora_jetson_rx.py` (camino heredado eliminado), `jetson/test_secure_protocol.py`
+- `jetson/test_tracking_logic.py` (**nuevo**), `jetson/run_bovino.py` (aviso
+  explicito del riesgo del ReID al arrancar)
+- `backend/src/app.js` (`RATE_LIMIT_MAX`), `backend/test/integration/api.test.js`
+- `.github/workflows/ci.yml` (**nuevo**), `.gitignore`
+- `pasos.txt` y `.codex` (solo las lineas con credenciales, redactadas)
+- `docs/planning/*`, `docs/codebase/TESTING.md`, `docs/codebase/STACK.md`,
+  `docs/arquitectura/despliegue.md`, `AGENTS.md`
+
+### Pruebas ejecutadas
+
+| Prueba | Resultado |
+| --- | --- |
+| `cd jetson && python3 -m unittest test_secure_protocol.py` | 22/22 |
+| `cd jetson && python3 -m unittest test_tracking_logic.py` | 9/9 |
+| `python3 -m py_compile` de los tres scripts de la Jetson | correcto |
+| Integracion backend con emuladores | 12/12 |
+| `cd frontend && flutter analyze && flutter test` | sin hallazgos y 32/32 |
+| `find backend -name '*.js' -not -path '*/node_modules/*' \| xargs node --check` | correcto |
+| Validacion del workflow con PyYAML | 4 jobs validos |
+
+### Errores resueltos
+
+- Receptor que ejecutaba comandos sin firma (hallazgo critico C-01).
+- Credenciales en claro en el arbol de trabajo (C-04, parcial: falta rotar).
+- `.gitignore` que ignoraba archivos versionados (C-06).
+- Prueba de integracion propia escrita con un `timestamp` fuera de la ventana
+  que valida el backend (`-60 s`): corregida a `-4 s`.
+
+### Observacion nueva
+
+`C-14`: el listado de conteos deduplica ids entre colecciones, pero el contador
+del dashboard suma documentos por coleccion. Si el mismo id existe en ambas
+ubicaciones, el panel muestra un total mayor que el historial. Queda cubierto por
+prueba y pendiente de decision (migrar datos o contar ids unicos).
+
+### Problemas pendientes
+
+- **Desplegar el receptor actualizado** en la Jetson: `lora_jetson_rx.py` cambio
+  y hasta copiarlo el servicio sigue aceptando tramas sin firma.
+- **Rotar las credenciales** expuestas (GitHub, proveedor de LLM, hotspot).
+- F4/F5 bloqueadas por hardware; F3 y F8 pendientes de decision.
+- `revicion.txt` sigue sin informe de auditoria asociado (C-11).
+
+### Siguiente paso recomendado
+
+Copiar `jetson/lora_jetson_rx.py` y `jetson/secure_protocol.py` a
+`/home/cow/Documents/Script/`, reiniciar `bovisense-lora.service`, confirmar en el
+log que una trama sin firma se descarta y que el flujo C1/R1 sigue funcionando.

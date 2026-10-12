@@ -1,0 +1,318 @@
+
+=== DIRECTORY TREE (max depth 3, source files only) ===
+.agents
+.agents/skills
+.agents/skills/acquire-codebase-knowledge
+.agents/skills/acquire-codebase-knowledge/SKILL.md
+.agents/skills/acquire-codebase-knowledge/assets
+.agents/skills/acquire-codebase-knowledge/references
+.agents/skills/acquire-codebase-knowledge/scripts
+.agents/skills/architecture-blueprint-generator
+.agents/skills/architecture-blueprint-generator/SKILL.md
+.codex
+.gitignore
+AGENTS.md
+README.md
+backend
+backend/.codex
+backend/.env
+backend/api
+backend/api/index.js
+backend/aplicacion-cabfa-firebase-adminsdk-fbsvc-bf8336754e.json
+backend/google-services.json
+backend/package-lock.json
+backend/package.json
+backend/src
+backend/src/app.js
+backend/src/config
+backend/src/config/firebaseAdmin.js
+backend/src/controllers
+backend/src/controllers/ganaderoController.js
+backend/src/controllers/usuarioController.js
+backend/src/middlewares
+backend/src/middlewares/authMiddleware.js
+backend/src/middlewares/profileAuthMiddleware.js
+backend/src/routes
+backend/src/routes/ganaderoRoutes.js
+backend/src/routes/usuarioRoute.js
+backend/src/routes/usuarioRoutes.js
+backend/src/services
+backend/src/services/iotProtocol.js
+backend/src/services/iotService.js
+backend/src/services/mailService.js
+backend/src/services/userService.js
+backend/src/utils
+backend/src/utils/pagination.js
+backend/src/utils/passwordGenerator.js
+backend/src/utils/validation.js
+backend/test
+backend/test/integration
+backend/test/integration/api.test.js
+backend/test/security.test.js
+backend/vercel.json
+comunicacion-iot
+comunicacion-iot/docs
+comunicacion-iot/docs/analisis-codigos-referencia.md
+comunicacion-iot/docs/arquitectura-comunicacion.md
+comunicacion-iot/docs/flujo-comandos.md
+comunicacion-iot/docs/protocolo-lora.md
+comunicacion-iot/esp32
+comunicacion-iot/esp32/bridge_hotspot_lora_discovery
+comunicacion-iot/esp32/bridge_hotspot_lora_discovery/bridge_hotspot_lora_discovery.ino
+comunicacion-iot/hardware
+comunicacion-iot/hardware/README.md
+comunicacion-iot/hardware/__init__.py
+comunicacion-iot/hardware/advertencias-seguridad.md
+comunicacion-iot/hardware/pinout-sugerido.md
+comunicacion-iot/shared
+comunicacion-iot/shared/__init__.py
+comunicacion-iot/shared/constants.py
+comunicacion-iot/shared/message_examples.json
+comunicacion-iot/shared/protocol.py
+docs
+docs/codebase
+docs/codebase/.codebase-scan.txt
+docs/seguridad-y-despliegue.md
+firebase.json
+firestore-debug.log
+firestore.rules
+frontend
+frontend/.dart_tool
+frontend/.dart_tool/dartpad
+frontend/.dart_tool/dartpad/web_plugin_registrant.dart
+frontend/.dart_tool/flutter_build
+frontend/.dart_tool/flutter_build/1bcb9f6befb2094153df2732a0ab70b5
+frontend/.dart_tool/flutter_build/7a1914d2c9ea477617e66ccf6a02cc04
+frontend/.dart_tool/flutter_build/bb125b55d9e9b7ac585611e4faddf17f
+frontend/.dart_tool/flutter_build/d952273949e848f1e044138bf9e38bdd
+frontend/.dart_tool/flutter_build/dab45dc70052e2ee62873e944b26e711
+frontend/.dart_tool/flutter_build/dart_plugin_registrant.dart
+frontend/.dart_tool/flutter_build/e7f3e6adc23e122d1f84f5a9d7b7ed03
+frontend/.dart_tool/package_config.json
+frontend/.dart_tool/package_graph.json
+frontend/.dart_tool/version
+frontend/.flutter-plugins-dependencies
+frontend/.gitignore
+frontend/.idea
+frontend/.idea/libraries
+frontend/.idea/libraries/Dart_SDK.xml
+frontend/.idea/libraries/KotlinJavaRuntime.xml
+frontend/.idea/modules.xml
+frontend/.idea/runConfigurations
+frontend/.idea/runConfigurations/main_dart.xml
+frontend/.idea/workspace.xml
+frontend/.metadata
+frontend/README.md
+frontend/analysis_options.yaml
+frontend/android
+frontend/android/.gitignore
+frontend/android/.gradle
+frontend/android/.gradle/8.14
+frontend/android/.gradle/buildOutputCleanup
+frontend/android/.gradle/file-system.probe
+frontend/android/.gradle/noVersion
+frontend/android/.gradle/vcs-1
+frontend/android/.kotlin
+frontend/android/.kotlin/sessions
+frontend/android/app
+frontend/android/app/build.gradle.kts
+frontend/android/app/google-services.json
+frontend/android/app/src
+frontend/android/build.gradle.kts
+frontend/android/frontend_android.iml
+frontend/android/gradle
+frontend/android/gradle/wrapper
+frontend/android/gradle.properties
+frontend/android/gradlew
+frontend/android/gradlew.bat
+frontend/android/local.properties
+frontend/android/settings.gradle.kts
+frontend/assets
+frontend/assets/images
+frontend/assets/images/logoApp.png
+frontend/firebase.json
+frontend/frontend.iml
+frontend/ios
+frontend/ios/.gitignore
+frontend/ios/Flutter
+frontend/ios/Flutter/AppFrameworkInfo.plist
+frontend/ios/Flutter/Debug.xcconfig
+frontend/ios/Flutter/Generated.xcconfig
+frontend/ios/Flutter/Release.xcconfig
+frontend/ios/Flutter/ephemeral
+frontend/ios/Flutter/flutter_export_environment.sh
+frontend/ios/Runner
+frontend/ios/Runner/AppDelegate.swift
+frontend/ios/Runner/Assets.xcassets
+frontend/ios/Runner/Base.lproj
+frontend/ios/Runner/GeneratedPluginRegistrant.h
+frontend/ios/Runner/GeneratedPluginRegistrant.m
+frontend/ios/Runner/Info.plist
+frontend/ios/Runner/Runner-Bridging-Header.h
+frontend/ios/Runner.xcodeproj
+frontend/ios/Runner.xcodeproj/project.pbxproj
+frontend/ios/Runner.xcodeproj/project.xcworkspace
+frontend/ios/Runner.xcodeproj/xcshareddata
+frontend/ios/Runner.xcworkspace
+frontend/ios/Runner.xcworkspace/contents.xcworkspacedata
+frontend/ios/Runner.xcworkspace/xcshareddata
+frontend/ios/RunnerTests
+frontend/ios/RunnerTests/RunnerTests.swift
+frontend/lib
+frontend/lib/core
+frontend/lib/core/config
+frontend/lib/core/theme
+frontend/lib/core/utils
+frontend/lib/data
+frontend/lib/data/models
+frontend/lib/data/repositories
+frontend/lib/data/services
+frontend/lib/firebase_options.dart
+frontend/lib/main.dart
+frontend/lib/viewmodels
+frontend/lib/viewmodels/admin_usuarios_view_model.dart
+frontend/lib/viewmodels/auth_view_model.dart
+frontend/lib/viewmodels/ganadero_view_model.dart
+frontend/lib/viewmodels/session_notifier.dart
+frontend/lib/views
+frontend/lib/views/admin
+frontend/lib/views/auth
+frontend/lib/views/auth_gate.dart
+frontend/lib/views/common
+frontend/lib/views/ganadero
+frontend/linux
+frontend/linux/.gitignore
+frontend/linux/CMakeLists.txt
+frontend/linux/flutter
+frontend/linux/flutter/CMakeLists.txt
+frontend/linux/flutter/ephemeral
+frontend/linux/flutter/generated_plugin_registrant.cc
+frontend/linux/flutter/generated_plugin_registrant.h
+frontend/linux/flutter/generated_plugins.cmake
+frontend/linux/runner
+frontend/linux/runner/CMakeLists.txt
+frontend/linux/runner/main.cc
+frontend/linux/runner/my_application.cc
+frontend/linux/runner/my_application.h
+frontend/macos
+frontend/macos/.gitignore
+frontend/macos/Flutter
+frontend/macos/Flutter/Flutter-Debug.xcconfig
+frontend/macos/Flutter/Flutter-Release.xcconfig
+frontend/macos/Flutter/GeneratedPluginRegistrant.swift
+
+=== STACK DETECTION (manifest files) ===
+No recognized manifest files found in project root.
+
+=== ENTRY POINTS ===
+No common entry points found. Check 'main' or 'scripts.start' in manifest files above.
+
+=== LINTING AND FORMATTING CONFIG ===
+No linting or formatting config files found in project root.
+
+=== ENVIRONMENT VARIABLE TEMPLATES ===
+No .env.example or .env.template found. Identify required environment variables by searching the code and config for environment variable reads.
+
+=== TODO / FIXME / HACK (production code only, test dirs excluded) ===
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:28: TODO_LIMIT = 60
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:291: """Search for TODO/FIXME/HACK comments."""
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:291: """Search for TODO/FIXME/HACK comments."""
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:291: """Search for TODO/FIXME/HACK comments."""
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:293: patterns = ["TODO", "FIXME", "HACK"]
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:293: patterns = ["TODO", "FIXME", "HACK"]
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:293: patterns = ["TODO", "FIXME", "HACK"]
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:320: return todos[:TODO_LIMIT]
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:617: # TODOs
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:620: print_section("TODO / FIXME / HACK (production code only, test dirs excluded)", todos, output_file)
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:620: print_section("TODO / FIXME / HACK (production code only, test dirs excluded)", todos, output_file)
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:620: print_section("TODO / FIXME / HACK (production code only, test dirs excluded)", todos, output_file)
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:622: print_section("TODO / FIXME / HACK (production code only, test dirs excluded)", ["None found."], output_file)
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:622: print_section("TODO / FIXME / HACK (production code only, test dirs excluded)", ["None found."], output_file)
+.agents/skills/acquire-codebase-knowledge/scripts/scan.py:622: print_section("TODO / FIXME / HACK (production code only, test dirs excluded)", ["None found."], output_file)
+
+=== GIT RECENT COMMITS (last 20) ===
+84dc003 Mejoras considerables
+8981985 Actualiza AGENTS.md: estado final y checklist de despliegue
+7d10336 Corrige flujo de conteo, alertas y vistas de ganadero y administrador
+d3fbb66 Remove backend node_modules from repository
+afa09a1 Mejoras backend BoviSense
+082a804 se exporto express para serverless vercel
+90b7839 se exporto express para serverless vercel
+9c14c3c Mejoras en experiancia de usuario
+ef27d59 Mejoras en navegacion, elinacion de AlertCard informativos
+36a8b25 Cambio de icono, reduccion de tamaños de card
+75eb8db Cambio de icono, reduccion de tamaños de card
+79598f0 Cambio de icono, reduccion de tamaños de card
+4dd7d7c Mejoras en mensaje 'Contacta con soporte'
+b3f7f93 Mejoras envio de creenciales por correo electronico
+4a929b4 README.md mejorado
+4d6a1f3 Cambio de nombre de la app y se añadio splast screen
+d2a6613 refactorizacion del diseño Admin
+ae2512b Mejoras en LOgion y cambiar contraseña screen admin/usuario
+9803237 Refactorizacion de la IU de usuario
+6285a48 Se reemplazo flujo simulado por conteo real lora
+
+=== HIGH-CHURN FILES (last 90 days, top 20) ===
+   2 .gitignore
+   2 AGENTS.md
+   2 backend/src/app.js
+   2 backend/src/controllers/ganaderoController.js
+   2 backend/src/controllers/usuarioController.js
+   2 backend/src/middlewares/authMiddleware.js
+   2 backend/src/services/iotProtocol.js
+   2 backend/src/services/iotService.js
+   2 backend/src/utils/pagination.js
+   2 backend/test/integration/api.test.js
+   2 backend/test/security.test.js
+   2 backend/node_modules/.package-lock.json
+   2 backend/node_modules/@firebase/app-check-interop-types/package.json
+   2 backend/node_modules/@firebase/app-types/package.json
+   2 backend/node_modules/@firebase/auth-interop-types/package.json
+   2 backend/node_modules/@firebase/component/dist/esm/index.esm.js.map
+   2 backend/node_modules/@firebase/component/dist/index.cjs.js.map
+   2 backend/node_modules/@firebase/component/package.json
+   2 backend/node_modules/@firebase/database-compat/dist/index.esm.js
+   2 backend/node_modules/@firebase/database-compat/dist/index.esm.js.map
+
+=== MONOREPO SIGNALS ===
+No monorepo signals detected.
+
+=== CODE METRICS ===
+Total files scanned: 377
+Total lines of code: 13551
+
+Files by language:
+  Other: 327
+  JavaScript: 19
+  Python: 10
+  C Header: 9
+  Swift: 6
+  C++: 4
+  Java: 1
+  Kotlin: 1
+
+Top 10 largest files:
+frontend/.dart_tool/flutter_build/dab45dc70052e2ee62873e944b26e711/app.dill: 45596.0KB
+frontend/.dart_tool/flutter_build/e7f3e6adc23e122d1f84f5a9d7b7ed03/app.dill: 45595.4KB
+frontend/.dart_tool/flutter_build/7a1914d2c9ea477617e66ccf6a02cc04/app.dill: 45490.9KB
+frontend/.dart_tool/flutter_build/1bcb9f6befb2094153df2732a0ab70b5/app.dill: 45489.0KB
+frontend/.dart_tool/flutter_build/bb125b55d9e9b7ac585611e4faddf17f/app.dill: 45485.8KB
+frontend/.dart_tool/flutter_build/d952273949e848f1e044138bf9e38bdd/app.dill: 45454.6KB
+frontend/android/.gradle/8.14/executionHistory/executionHistory.bin: 9916.8KB
+frontend/assets/images/logoApp.png: 6098.0KB
+frontend/android/app/src/main/res/drawable/logo_app.png: 6098.0KB
+frontend/android/.gradle/8.14/fileHashes/fileHashes.bin: 347.1KB
+
+=== CI/CD PIPELINES ===
+No CI/CD pipelines detected.
+
+=== CONTAINERS & ORCHESTRATION ===
+No containerization configs detected.
+
+=== SECURITY & COMPLIANCE ===
+No security configs detected.
+
+=== PERFORMANCE & TESTING ===
+No performance testing configs detected.
+
+=== SCAN COMPLETE ===

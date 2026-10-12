@@ -225,6 +225,35 @@ class ControllerTests(unittest.TestCase):
         finally:
             self.module.count_controller = previous_controller
 
+    def test_unsigned_frames_never_execute_commands(self):
+        """El enlace LoRa es alcanzable: sin firma C1 no debe pasar nada."""
+        controller = self.module.CountSessionController()
+        calls = []
+        for name in ("prepare", "start", "stop", "status", "result"):
+            def recorder(*args, _name=name, **kwargs):
+                calls.append(_name)
+                return {"status": "READY", "count": "unknown"}
+
+            setattr(controller, name, recorder)
+
+        previous_controller = self.module.count_controller
+        try:
+            self.module.count_controller = controller
+            radio = FakeRadio()
+            for frame in (
+                "BRIDGE|17|INICIARCONTEO",   # protocolo heredado ESP8266
+                "INICIARCONTEO",             # comando suelto
+                "ESTADO|16",                 # estado heredado
+                "CMD:INICIARCONTEO",         # protocolo previo de la app
+                "R1|0abcdef|xyz",            # respuesta malformada
+            ):
+                with redirect_stdout(StringIO()):
+                    self.module.maybe_reply_to_command(radio, frame)
+            self.assertEqual(calls, [], "una trama sin firma no debe ejecutar comandos")
+            self.assertEqual(radio.sent, [], "una trama sin firma no debe transmitir")
+        finally:
+            self.module.count_controller = previous_controller
+
 
 class RadioModeTests(unittest.TestCase):
     @classmethod

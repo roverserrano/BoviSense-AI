@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import time
-import socket
 import subprocess
 import argparse
 import fcntl
@@ -561,110 +560,6 @@ class SX1278Receiver:
             finally:
                 os.close(self.spi_lock_fd)
                 self.spi_lock_fd = None
-
-
-def clean_field(value, fallback="No disponible", max_length=32):
-    text = str(value).strip()
-    if not text:
-        text = fallback
-    text = text.replace("|", "/").replace("\n", " ").replace("\r", " ")
-    return text[:max_length]
-
-
-def read_power_mode():
-    try:
-        result = subprocess.run(
-            ["nvpmodel", "-q"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        output = result.stdout + result.stderr
-        for line in output.splitlines():
-            if "NV Power Mode" in line or "Power Mode" in line:
-                return clean_field(line.split(":", 1)[-1], max_length=12)
-    except Exception as exc:
-        return clean_field(f"error {exc}", max_length=28)
-
-    return "No disponible"
-
-
-def read_uptime():
-    try:
-        with open("/proc/uptime", "r", encoding="utf-8") as file:
-            seconds = int(float(file.read().split()[0]))
-        days, rem = divmod(seconds, 86400)
-        hours, rem = divmod(rem, 3600)
-        minutes, _ = divmod(rem, 60)
-        if days:
-            return f"{days}d{hours}h"
-        return f"{hours}h{minutes}m"
-    except Exception:
-        return "No disponible"
-
-
-def read_cpu_temp():
-    try:
-        thermal_root = "/sys/class/thermal"
-        candidates = []
-        for index in range(20):
-            base = f"{thermal_root}/thermal_zone{index}"
-            try:
-                with open(f"{base}/type", "r", encoding="utf-8") as file:
-                    zone_type = file.read().strip().lower()
-                with open(f"{base}/temp", "r", encoding="utf-8") as file:
-                    temp_c = int(file.read().strip()) / 1000.0
-                candidates.append((zone_type, temp_c))
-            except Exception:
-                continue
-
-        for zone_type, temp_c in candidates:
-            if "cpu" in zone_type or "thermal" in zone_type:
-                return f"{temp_c:.1f}C"
-        if candidates:
-            return f"{candidates[0][1]:.1f}C"
-    except Exception:
-        pass
-
-    return "No disponible"
-
-
-def read_memory():
-    try:
-        values = {}
-        with open("/proc/meminfo", "r", encoding="utf-8") as file:
-            for line in file:
-                key, raw_value = line.split(":", 1)
-                values[key] = int(raw_value.strip().split()[0])
-
-        total_mb = values["MemTotal"] // 1024
-        available_mb = values["MemAvailable"] // 1024
-        used_mb = total_mb - available_mb
-        return f"{used_mb}/{total_mb}"
-    except Exception:
-        return "No disponible"
-
-
-def read_load_average():
-    try:
-        with open("/proc/loadavg", "r", encoding="utf-8") as file:
-            return file.read().split()[0]
-    except Exception:
-        return "No disponible"
-
-
-def build_jetson_status_response(msg_id):
-    fields = {
-        "h": clean_field(socket.gethostname(), max_length=20),
-        "p": read_power_mode(),
-        "u": read_uptime(),
-        "t": read_cpu_temp(),
-        "m": read_memory(),
-        "l": read_load_average(),
-    }
-    status = "|".join(f"{key}={value}" for key, value in fields.items())
-    return f"RESP|{msg_id}|JS|{status}"
 
 
 class CountSessionController:
@@ -1369,14 +1264,6 @@ def maybe_reply_to_secure_command(rx, payload):
     return True
 
 
-def build_count_response(msg_id, fields):
-    safe_fields = []
-    for key, value in fields.items():
-        safe_value = clean_field(value, fallback="unknown", max_length=48)
-        safe_fields.append(f"{key}={safe_value}")
-    return f"RESP|{msg_id}|JETSON_COUNT|" + "|".join(safe_fields)
-
-
 def send_response(rx, response, label):
     print(f"LoRa TX: {response}")
     sent_count = 0
@@ -1396,57 +1283,25 @@ def send_response(rx, response, label):
 
 
 def maybe_reply_to_command(rx, payload):
+    """Procesa un paquete LoRa recibido.
+
+    Solo se ejecutan tramas C1 autenticadas. Cualquier otra trama se registra y
+    se descarta: el enlace LoRa es alcanzable por cualquier emisor cercano, por
+    lo que el equipo no debe aceptar comandos sin firma (tampoco del protocolo
+    heredado `BRIDGE`/`CMD:` de la etapa ESP8266).
+    """
     frame = payload.strip()
     if frame.startswith("C1|"):
-        if maybe_reply_to_secure_command(rx, frame):
-            return
+        maybe_reply_to_secure_command(rx, frame)
+        return
     if frame.startswith("R1|"):
         print("[LoRa] Eco/respuesta propia ignorada.")
         return
-
-    parts = frame.split("|")
-    command = parts[0].upper() if parts else ""
-    msg_id = "0"
-
-    legacy_commands = {
-        "BRIDGE",
-        "ESTADO",
-        "PREPARARCONTEO",
-        "INICIARCONTEO",
-        "DETENERCONTEO",
-        "ESTADOCONTEO",
-        "RESULTADOCONTEO",
-    }
-    if command not in legacy_commands:
-        print("[LoRa] Paquete no reconocido ignorado.")
-        return
-
-    if command == "BRIDGE" and len(parts) >= 3:
-        msg_id = parts[1] if parts[1].isdigit() else "0"
-        command = parts[2].upper()
-    elif len(parts) >= 2 and parts[1].isdigit():
-        msg_id = parts[1]
-
-    if command == "ESTADO":
-        response = build_jetson_status_response(msg_id)
-        send_response(rx, response, "ESTADO")
-        return
-
-    count_commands = {
-        "PREPARARCONTEO": count_controller.prepare,
-        "INICIARCONTEO": count_controller.start,
-        "DETENERCONTEO": count_controller.stop,
-        "ESTADOCONTEO": count_controller.status,
-        "RESULTADOCONTEO": count_controller.result,
-    }
-    if command in count_commands:
-        print(f"[Comando] {command} recibido msg_id={msg_id}")
-        fields = count_commands[command]()
-        response = build_count_response(msg_id, fields)
-        send_response(rx, response, command)
-        return
-
-    print(f"[Comando] Sin accion para payload: {payload}")
+    prefix = frame.split("|", 1)[0][:16]
+    print(
+        f"[Seguro] Trama sin firma C1 descartada (prefijo={prefix!r}); "
+        "solo se aceptan comandos C1/R1 autenticados."
+    )
 
 
 def parse_args():
