@@ -246,6 +246,102 @@ test('count history paginates with a real cursor', async () => {
     assert.equal(alertas.body.next_cursor, null);
 });
 
+// BOV-MED-001: con mas registros que la pagina compartiendo la misma fecha,
+// el cursor temporal excluia el resto del grupo y la segunda pagina volvia
+// vacia. El cursor compuesto (fecha, id) permite recorrer el grupo completo.
+test('records sharing a date paginate without loss', async () => {
+    const token = await account('tie-test');
+    await call('/api/ganadero/configuracion', token, 'PUT', { nombre_finca: 'Campo Igual', cantidad_esperada: 5 });
+
+    const stamp = Math.floor(Date.now() / 1000) - 4;
+    const expected = [];
+    for (let index = 0; index < 7; index += 1) {
+        expected.push(await saveCount(token, 10 + index, stamp));
+    }
+
+    const first = await call('/api/ganadero/conteos?limit=3', token);
+    assert.equal(first.body.conteos.length, 3);
+    assert.ok(first.body.next_cursor, 'queda mas de una pagina');
+    const second = await call(`/api/ganadero/conteos?limit=3&cursor=${encodeURIComponent(first.body.next_cursor)}`, token);
+    assert.equal(second.body.conteos.length, 3);
+    assert.ok(second.body.next_cursor, 'todavia queda un registro');
+    const third = await call(`/api/ganadero/conteos?limit=3&cursor=${encodeURIComponent(second.body.next_cursor)}`, token);
+    assert.equal(third.body.conteos.length, 1);
+    assert.equal(third.body.next_cursor, null);
+
+    const ids = [...first.body.conteos, ...second.body.conteos, ...third.body.conteos].map((conteo) => conteo.id);
+    assert.equal(new Set(ids).size, 7, 'ningun id repetido');
+    assert.deepEqual([...ids].sort(), [...expected].sort(), 'todos los ids recuperados');
+    assert.deepEqual(ids, [...ids].sort().reverse(), 'empate resuelto por id descendente');
+});
+
+// BOV-HIGH-001: antes, verificar de nuevo una respuesta IDLE ya cacheada
+// volvia a aplicar sus efectos y liberaba la reserva vigente, incluso la de
+// otro usuario. Un replay debe devolver el resultado cacheado sin efectos.
+test('replaying a verified IDLE does not release another session', async () => {
+    const firstToken = await account('replay-a');
+    const secondToken = await account('replay-b');
+    const deviceId = process.env.IOT_DEVICE_ID || 'jetson-01';
+    await call('/api/ganadero/configuracion', secondToken, 'PUT', { nombre_finca: 'Campo Replay', cantidad_esperada: 12 });
+
+    // A consulta H sin sesion y queda verificada como IDLE.
+    const statusTicket = await issueCommand(firstToken, 'ESTADO');
+    const idle = signResponse(statusTicket.request_id, '-', 'IDLE', '-');
+    assert.equal((await verifyFrame(firstToken, idle.frame)).body.status, 'IDLE');
+
+    // B reserva el equipo con una sesion nueva.
+    const startTicket = await issueCommand(secondToken, 'INICIARCONTEO');
+    const sessionId = startTicket.session_id;
+    await verifyFrame(secondToken, signResponse(startTicket.request_id, sessionId, 'STARTED', '-').frame);
+    const before = (await db.doc(`IotDevices/${deviceId}`).get()).data();
+    assert.equal(before.session_id, sessionId);
+
+    // Replay de la respuesta ya verificada de A: idempotente, sin transiciones.
+    const replay = await verifyFrame(firstToken, idle.frame);
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.status, 'IDLE');
+    const after = (await db.doc(`IotDevices/${deviceId}`).get()).data();
+    assert.equal(after.session_id, sessionId, 'el replay no debe liberar la sesion de B');
+    assert.ok(after.lease_until > Math.floor(Date.now() / 1000));
+
+    // B conserva el control de su sesion y puede cerrarla con normalidad.
+    const pollTicket = await issueCommand(secondToken, 'ESTADOCONTEO', { session_id: sessionId });
+    const running = await verifyFrame(secondToken, signResponse(pollTicket.request_id, sessionId, 'RUNNING', 3).frame);
+    assert.equal(running.body.status, 'RUNNING');
+    const stopTicket = await issueCommand(secondToken, 'DETENERCONTEO', { session_id: sessionId });
+    const stopped = await verifyFrame(secondToken, signResponse(stopTicket.request_id, sessionId, 'STOPPED', 3).frame);
+    assert.equal(stopped.body.status, 'STOPPED');
+});
+
+// BOV-HIGH-004: un cierre forzado (SIGKILL, camara congelada) no debe poder
+// guardarse como final. La Jetson responde ERROR sin conteo y el backend no
+// emite proof terminal ni permite registrar el conteo.
+test('a forced termination is not a saveable final result', async () => {
+    const token = await account('forced-stop');
+    const deviceId = process.env.IOT_DEVICE_ID || 'jetson-01';
+    await call('/api/ganadero/configuracion', token, 'PUT', { nombre_finca: 'Campo Forzado', cantidad_esperada: 9 });
+
+    const start = await issueCommand(token, 'INICIARCONTEO');
+    const sessionId = start.session_id;
+    await verifyFrame(token, signResponse(start.request_id, sessionId, 'STARTED', '-').frame);
+
+    const stop = await issueCommand(token, 'DETENERCONTEO', { session_id: sessionId });
+    const forced = signResponse(stop.request_id, sessionId, 'ERROR', '-');
+    const verified = await verifyFrame(token, forced.frame);
+    assert.equal(verified.body.status, 'ERROR');
+    assert.equal(verified.body.proof, null);
+    assert.equal(verified.body.count, 'unknown');
+
+    const session = await db.doc(`IotSessions/${sessionId}`).get();
+    assert.equal(session.data().status, 'ERROR');
+    assert.equal(session.data().proof, undefined);
+    assert.equal((await db.doc(`IotDevices/${deviceId}`).get()).data().lease_until, 0);
+
+    const saved = await call('/api/ganadero/conteos', token, 'POST', { session_id: sessionId, proof: forced.frame });
+    assert.equal(saved.status, 400, 'un cierre forzado no es un final valido');
+    assert.equal((await call('/api/ganadero/conteos', token)).body.conteos.length, 0);
+});
+
 test('admin user list is alphabetical, reports a summary and paginates', async () => {
     const createdNames = ['Ana', 'Bruno', 'Zoe'];
     for (let index = 0; index < createdNames.length; index += 1) {

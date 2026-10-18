@@ -1,3 +1,6 @@
+// Duplicado historico sin montar: la API registra `usuarioRoutes.js` (plural)
+// en `app.js` como `/api/admin/usuarios`. No agregar rutas nuevas aqui; este
+// archivo se conserva solo como referencia (ver InformeAuditoria, BOV-LOW-002).
 const express = require('express');
 
 const { requireRoles } = require('../middlewares/profileAuthMiddleware');

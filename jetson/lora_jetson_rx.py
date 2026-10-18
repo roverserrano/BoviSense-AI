@@ -11,7 +11,7 @@ import signal
 from pathlib import Path
 import spidev
 
-from secure_protocol import STATES, SecureProtocol
+from secure_protocol import HEX_ID, STATES, SecureProtocol
 
 # =========================================================
 # CONFIGURACIÓN
@@ -687,7 +687,9 @@ class CountSessionController:
         self.sync_worker_state(skip_timeout=True)
 
         if self.session is None:
-            if self.result_matches_requested_session(requested_session):
+            if self.result_matches_requested_session(
+                requested_session
+            ) or self.recover_stored_result(requested_session):
                 return self.result_response(status="STOPPED")
 
             # Sin sesion en memoria no hay conflicto que resolver: el equipo
@@ -747,16 +749,53 @@ class CountSessionController:
             self.finish_session("stop_error", status="ERROR", detail=str(exc))
             return self.response_fields("ERROR", detail=str(exc), session=session_id)
 
-        finish_reason = "killed_after_timeout" if killed else reason
-        self.finish_session(finish_reason, status="STOPPED", detail=finish_reason)
+        if killed:
+            # Terminacion forzada: el worker no confirmo ningun final. El
+            # ultimo acumulado no es confiable y no debe viajar como STOPPED,
+            # porque la app podria guardarlo como resultado final valido.
+            self.session["count"] = None
+            self.finish_session(
+                "killed_after_timeout",
+                status="ERROR",
+                detail="forced_termination",
+            )
+            return self.result_response(status="ERROR")
+
+        self.finish_session(reason, status="STOPPED", detail=reason)
         return self.result_response(status="STOPPED")
 
     def status(self, requested_session=None):
         self.sync_worker_state()
 
-        if self.session is None and not self.result_matches_requested_session(
-            requested_session
-        ):
+        if requested_session is None:
+            # H: disponibilidad del equipo, nunca un resultado de sesion. Antes
+            # respondia el ultimo STOPPED con su conteo (y R1 con sesion '-'),
+            # trama que el backend rechaza porque un final necesita sesion y
+            # fecha de cierre. Tampoco se filtra el conteo en curso a quien
+            # solo consulta el estado.
+            if self.session is None:
+                return self.idle_fields()
+            if self.is_worker_alive():
+                return self.response_fields(
+                    "RUNNING",
+                    detail=self.session.get("detail", ""),
+                    session=self.session_id(),
+                    count=None,
+                )
+            return self.response_fields(
+                "READY",
+                detail="available",
+                session="none",
+                alive=False,
+                count=None,
+            )
+
+        # Q: estado de una sesion concreta (el backend ya verifico propiedad).
+        if self.session is None:
+            if self.result_matches_requested_session(
+                requested_session
+            ) or self.recover_stored_result(requested_session):
+                return self.result_response(status="STOPPED")
             # El equipo no tiene sesion ni resultado de lo solicitado: esta
             # disponible. Devolver ERROR haria parecer una falla del hardware.
             return self.idle_fields()
@@ -769,12 +808,20 @@ class CountSessionController:
                 alive=self.is_worker_alive(),
                 count=None,
             )
-        if self.session is None:
-            return self.idle_fields()
-
+        if self.is_worker_alive():
+            # El conteo en curso pertenece a esta sesion: se puede mostrar.
+            return self.response_fields(
+                self.session["status"],
+                detail=self.session.get("detail", ""),
+                session=self.session_id(),
+            )
+        if self.result_matches_requested_session(requested_session):
+            # Finalizado: se responde con la fecha de cierre original, no con
+            # una fabricada al momento de responder.
+            return self.result_response(status="STOPPED")
         return self.response_fields(
             self.session["status"],
-            detail=self.session.get("detail", ""),
+            detail="result_not_available_yet",
             session=self.session_id(),
         )
 
@@ -782,7 +829,9 @@ class CountSessionController:
         self.sync_worker_state()
 
         if self.session is None:
-            if self.result_matches_requested_session(requested_session):
+            if self.result_matches_requested_session(
+                requested_session
+            ) or self.recover_stored_result(requested_session):
                 return self.result_response(status="RESULT")
             return self.idle_fields()
 
@@ -920,12 +969,69 @@ class CountSessionController:
             count=self.session.get("count"),
             completed=int(self.session["end_time"]),
         )
+        self.persist_result()
         self.log(
             f"Sesion {self.session['id']} finalizada status={status} "
             f"reason={reason} elapsed={self.last_result['elapsed']}s "
             f"count={self.count_text(self.session.get('count'))}"
         )
         self.close_log_file()
+
+    def persist_result(self):
+        """Guarda el resultado final en SQLite antes de responder.
+
+        Asi sobrevive un reinicio del receptor y RESULTADOCONTEO puede
+        recuperarlo despues con su fecha original de cierre. La tabla
+        `results` ya existia, pero no tenia llamadas operativas.
+        """
+        if secure_protocol is None or self.last_result is None:
+            return
+        session = str(self.last_result.get("session", ""))
+        if not HEX_ID.fullmatch(session):
+            return
+        try:
+            secure_protocol.save_result(self.last_result)
+            self.log(
+                f"Resultado persistido session={session} "
+                f"status={self.last_result['status']}"
+            )
+        except Exception as exc:
+            self.log(f"No se pudo persistir el resultado: {exc}")
+
+    def recover_stored_result(self, requested_session):
+        """Recupera de SQLite el resultado de una sesion perdida de memoria.
+
+        Un reinicio del receptor borra `session`/`last_result`; sin esto, R/T
+        respondian IDLE y el resultado firmado quedaba inaccesible.
+        """
+        if self.session is not None or self.last_result is not None:
+            return False
+        if not requested_session or requested_session == "-":
+            return False
+        if secure_protocol is None:
+            return False
+        try:
+            stored = secure_protocol.result(requested_session)
+        except Exception as exc:
+            self.log(f"No se pudo leer el resultado persistido: {exc}")
+            return False
+        if not stored:
+            return False
+        self.last_result = {
+            "session": requested_session,
+            "status": str(stored.get("status") or "ERROR").upper(),
+            "reason": "persisted_result",
+            "detail": "persisted_result",
+            "pid": "none",
+            "elapsed": 0,
+            "count": stored.get("count"),
+            "completed": stored.get("completed") or 0,
+        }
+        self.log(
+            f"Sesion {requested_session} recuperada de SQLite "
+            f"status={self.last_result['status']}"
+        )
+        return True
 
     def read_worker_hooks_without_finishing(self):
         if self.session is None:
@@ -1304,6 +1410,17 @@ def maybe_reply_to_command(rx, payload):
     )
 
 
+def shutdown_signal_handler(signum, frame):
+    """SIGTERM del servicio -> KeyboardInterrupt para limpiar en `finally`.
+
+    Con el manejador por defecto el proceso moria de inmediato: el `finally`
+    de `main` no se ejecutaba y el worker de conteo quedaba huerfano,
+    reteniendo camara y GPU. Al convertirlo en KeyboardInterrupt, `main`
+    detiene el worker y cierra el SPI antes de salir.
+    """
+    raise KeyboardInterrupt
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="BoviSense Jetson Orin Nano LoRa SX1278 RX/TX bridge"
@@ -1450,6 +1567,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # Un SIGTERM del servicio debe pasar por la limpieza del `finally`:
+    # detener el worker y liberar SPI. Sin manejador, Python terminaba el
+    # proceso sin ejecutar la limpieza.
+    signal.signal(signal.SIGTERM, shutdown_signal_handler)
     global SPI_SPEED_HZ, SPI_BUS, SPI_DEV
     global TX_POWER_DBM
     global LORA_INIT_ATTEMPTS

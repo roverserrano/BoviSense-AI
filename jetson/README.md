@@ -11,7 +11,9 @@ tener otra version.
 | `lora_jetson_rx.py` | Receptor SX1278, autenticacion `C1`/`R1`, sesion y control del worker. |
 | `run_bovino.py` | Detector de camara CSI + TensorRT; publica eventos `COUNT_*`. |
 | `secure_protocol.py` | Envolventes firmadas, antirreplay y estado en SQLite. |
-| `test_secure_protocol.py` | Pruebas unitarias del protocolo y del control de radio. |
+| `test_secure_protocol.py` | Pruebas unitarias del protocolo y del control de radio (29 casos). |
+| `test_tracking_logic.py` | Pruebas de la logica de tracking del worker (9 casos). |
+| `tracking.md` | Especificacion del seguimiento MOT de `run_bovino.py` (trabajo propuesto). |
 | `systemd/unbuffered.conf` | Drop-in que fija `PYTHONUNBUFFERED=1`. |
 
 ## Rutas reales en el equipo
@@ -55,7 +57,9 @@ que el worker publique un conteo confiable.
 
 ```bash
 cd jetson
-python3 -m unittest test_secure_protocol.py
+python3 -m unittest test_secure_protocol.py    # 29 casos
+python3 -m unittest test_tracking_logic.py    # 9 casos
 ```
 
-No requieren hardware: el SX1278 se sustituye por dobles de prueba.
+No requieren hardware: el SX1278, TensorRT y CUDA se sustituyen por dobles de
+prueba.

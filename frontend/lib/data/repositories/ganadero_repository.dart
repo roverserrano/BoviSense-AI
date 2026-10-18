@@ -15,11 +15,13 @@ class GanaderoRepository {
   String? alertasCursor;
   Future<Map<String, dynamic>> issueCommand(
     String command,
-    String requestId,
-  ) async => Map<String, dynamic>.from(
+    String requestId, {
+    String? sessionId,
+  }) async => Map<String, dynamic>.from(
     await _apiClient.post('/api/ganadero/iot/comandos', {
       'command': command,
       'request_id': requestId,
+      if (sessionId != null) 'session_id': sessionId,
     }),
   );
   Future<Map<String, dynamic>> verifyResponse(String frame) async =>

@@ -28,7 +28,7 @@ Evidencia por tramo: `frontend/lib/data/services/esp32_ble_bridge_service.dart`
 | Emisión | `POST /api/ganadero/iot/comandos {command, request_id}` → `{frame, request_id, session_id, command}` | `docs/arquitectura/api-http.md`; `backend/src/services/iotService.js:11-67` |
 | Verificación | `POST /api/ganadero/iot/respuestas {frame}` → `{status, session, count, device_id, proof}` | `backend/src/services/iotService.js:69-103` |
 | Firma | HMAC-SHA256 sobre el payload C1/R1, truncado a 16 bytes (32 hex) | `backend/src/services/iotProtocol.js:17-19` |
-| Vigencia del ticket | 60 s (`expires = now + 60`) | `backend/src/services/iotService.js:60` |
+| Vigencia del ticket | 60 s (`expires = now + 60`) | `backend/src/services/iotService.js:61` |
 | Reutilización | Un `request_id` repetido con el mismo comando y sesión devuelve el mismo ticket; con datos distintos responde `409` | `backend/src/services/iotService.js:20-28` |
 | Contención del dispositivo | Lease de 900 s por usuario; otro usuario recibe `409` | `backend/src/services/iotService.js:37-51` |
 
@@ -81,9 +81,9 @@ R1|request_id|session_id|status|count|timestamp|completed_at|mac
 ```
 
 - `count`: `-` cuando no hay conteo confiable
-  (`jetson/secure_protocol.py:52`).
-- `completed_at`: solo en `RESULT` o `STOPPED`
   (`jetson/secure_protocol.py:53`).
+- `completed_at`: solo en `RESULT` o `STOPPED`
+  (`jetson/secure_protocol.py:54`).
 - `status`: `READY`, `STARTED`, `RUNNING`, `STOPPED`, `RESULT`, `ERROR`, `BUSY`,
   `IDLE` (`backend/src/services/iotProtocol.js:5`,
   `jetson/secure_protocol.py:12`).
@@ -107,12 +107,12 @@ R1|request_id|session_id|status|count|timestamp|completed_at|mac
 
 | Comando | Etiqueta | Efecto verificado en el código | Evidencia |
 |---------|----------|-------------------------------|-----------|
-| `H` | ESTADO | Devuelve estado del receptor sin sesión; `IDLE` si no hay sesión | `jetson/lora_jetson_rx.py:840-861` |
-| `P` | PREPARARCONTEO | Valida entorno del worker y responde `READY` | `jetson/lora_jetson_rx.py:685-701` |
-| `S` | INICIARCONTEO | Abre sesión con el `session_id` del backend y lanza el worker | `jetson/lora_jetson_rx.py:703-785` |
-| `T` | DETENERCONTEO | Detiene el worker, firma el resultado; `IDLE` si no hay sesión | `jetson/lora_jetson_rx.py:787-838` |
-| `Q` | ESTADOCONTEO | Estado de la sesión; `IDLE` si el equipo no la conoce | `jetson/lora_jetson_rx.py:840-861` |
-| `R` | RESULTADOCONTEO | Resultado firmado si existe; `IDLE` si no hay sesión ni resultado | `jetson/lora_jetson_rx.py:863-891` |
+| `H` | ESTADO | Devuelve estado del receptor sin sesión; `IDLE` si no hay sesión | `jetson/lora_jetson_rx.py:754-780` |
+| `P` | PREPARARCONTEO | Valida entorno del worker y responde `READY` | `jetson/lora_jetson_rx.py:584-601` |
+| `S` | INICIARCONTEO | Abre sesión con el `session_id` del backend y lanza el worker | `jetson/lora_jetson_rx.py:602-685` |
+| `T` | DETENERCONTEO | Detiene el worker, firma el resultado; `IDLE` si no hay sesión | `jetson/lora_jetson_rx.py:686-753` |
+| `Q` | ESTADOCONTEO | Estado de la sesión; `IDLE` si el equipo no la conoce | `jetson/lora_jetson_rx.py:754-780` |
+| `R` | RESULTADOCONTEO | Resultado firmado si existe; `IDLE` si no hay sesión ni resultado | `jetson/lora_jetson_rx.py:781-810` |
 
 Antirreplay (`jetson/secure_protocol.py:60-96`): cada `request_id` se inserta en
 SQLite antes de ejecutar; si vuelve a llegar la misma trama, se devuelve la
@@ -127,21 +127,21 @@ run_bovino.py  --stdout-->  COUNT_UPDATE / COUNT_FINAL / WORKER_STATUS
 lora_jetson_rx.py lee el log y los JSON para construir status/count/completed
 ```
 
-Evidencia: `jetson/run_bovino.py:26-28,103-155`;
-`jetson/lora_jetson_rx.py:976-1005,1042-1066`.
+Evidencia: `jetson/run_bovino.py:26-28,103-174`;
+`jetson/lora_jetson_rx.py:871-903,937-961`.
 
 ## 6. Tabla de tiempos y límites (resumen)
 
 | Límite | Valor | Dónde |
 |--------|-------|-------|
-| Vigencia del ticket C1 | 60 s | `backend/src/services/iotService.js:60` |
+| Vigencia del ticket C1 | 60 s | `backend/src/services/iotService.js:61` |
 | Tolerancia de reloj de la Jetson | `-5 s` / `+65 s` | `jetson/secure_protocol.py:41-44` |
 | Lease del dispositivo | 900 s | `backend/src/services/iotService.js:51` |
 | Espera LoRa del puente | 22 s | `.ino:47` |
 | Espera de R1 en la app | 25 s | `esp32_ble_bridge_service.dart` |
 | Sondeo de conteo en la app | 4 s (con retroceso hasta 12 s) | `esp32_ble_bridge_service.dart` |
-| Duración máxima de sesión | 600 s | `jetson/lora_jetson_rx.py:62` |
-| Espera al detener el worker | 8 s antes de SIGKILL | `jetson/lora_jetson_rx.py:63` |
+| Duración máxima de sesión | 600 s | `jetson/lora_jetson_rx.py:61` |
+| Espera al detener el worker | 8 s antes de SIGKILL | `jetson/lora_jetson_rx.py:62` |
 | Purga de solicitudes en SQLite | 120 s | `jetson/secure_protocol.py:77` |
 
 ## 7. PENDIENTE DE VERIFICACIÓN en esta integración

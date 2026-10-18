@@ -10,15 +10,15 @@ hardware, marcados como `PENDIENTE DE VERIFICACIÓN`.
 
 | Severity | Concern | Evidence | Impact | Suggested action |
 |----------|---------|----------|--------|------------------|
-| Alta | **Módulo Jetson sin manifiesto de dependencias ni entorno reproducible** (no hay `requirements.txt`/`pyproject.toml`; el venv `env_detection` se construye a mano) | Búsqueda sin resultados; `jetson/lora_jetson_rx.py:49` apunta al intérprete del venv | Si se pierde la Jetson o el venv, no hay forma de reconstruir el entorno; bloquea reproducibilidad académica y despliegue | Congelar el entorno (`pip freeze`) y versionar un `jetson/requirements.txt` |
+| Alta | **Módulo Jetson sin manifiesto de dependencias ni entorno reproducible** (no hay `requirements.txt`/`pyproject.toml`; el venv `env_detection` se construye a mano) | Búsqueda sin resultados; `jetson/lora_jetson_rx.py:48` apunta al intérprete del venv | Si se pierde la Jetson o el venv, no hay forma de reconstruir el entorno; bloquea reproducibilidad académica y despliegue | Congelar el entorno (`pip freeze`) y versionar un `jetson/requirements.txt` |
 | Alta | **El estado de sesión vive solo en memoria de la Jetson y se reconcilia de forma implícita** | `backend/src/services/iotService.js:100-102`; incidente documentado en `AGENTS.md` sección 12 | Comandos dirigidos a sesiones inexistentes; pantallas bloqueadas para el usuario | Mantener la reconciliación por `IDLE` y añadir prueba de reinicio del servicio en QA |
 | Alta | **Publicación Android bloqueada**: `applicationId` de ejemplo y firma debug en release | `frontend/android/app/build.gradle.kts:27,44-47` | No se puede publicar en Play ni distinguir instalaciones | Definir `applicationId` definitivo y keystore de release antes de distribuir |
 | Media | **Credenciales de cliente versionadas**: `backend/google-services.json` y `frontend/android/app/google-services.json` están en el repositorio | `git ls-files`; `frontend/android/app/google-services.json` contiene `api_key` (3 apariciones) | La clave de cliente de Firebase es pública por diseño, pero su presencia no es una decisión explícita ni documentada | Decidir y documentar; si se retiran, excluirlos con `.gitignore` y distribuirlos aparte |
-| Media | **Ausencia de CI/CD**: no hay pipelines automatizados | `docs/codebase/.codebase-scan.txt`, sección `CI/CD PIPELINES` | Los tests dependen de ejecución manual; el repositorio puede integrarse roto | Añadir workflow que corra `npm test`, `flutter analyze/test` y `py_compile` |
-| Media | **ReID heurístico activado por defecto en el tracker** (descriptor HSV + reglas espaciales y de tamaño) | `jetson/run_bovino.py:1497-1560` (`_reid_score`), `--reid` por defecto `True` | Puede fusionar dos animales distintos y **subcontar**, el error más caro en un conteo | Validar en campo; si hay duda, usar `--no-reid` y comparar resultados |
+| Media | **CI sin cobertura de hardware ni despliegue**: existe CI (`.github/workflows/ci.yml`, 4 jobs: backend unitario, integración con emuladores, Flutter y Jetson) desde `b94fcda`, pero no cubre QA de hardware/campo ni despliegue | `.github/workflows/ci.yml` | Los flujos con radio, cámara o teléfono se validan solo a mano; el despliegue no está automatizado | Mantener el pipeline y añadir validación de hardware/campo y procedimiento de despliegue |
+| Media | **ReID heurístico activado por defecto en el tracker** (descriptor HSV + reglas espaciales y de tamaño) | `jetson/run_bovino.py:1639` (`_reid_score`) y `:2604` (`--reid` por defecto `True`) | Puede fusionar dos animales distintos y **subcontar**, el error más caro en un conteo | Validar en campo; si hay duda, usar `--no-reid` y comparar resultados |
 | Media | **Colecciones heredadas duplicadas** (`Conteos`, `Alertas`, `ConfiguracionSistema` de nivel raíz frente a subcolecciones por usuario) | `backend/src/controllers/ganaderoController.js:127-221` | Consultas dobles, coste y riesgo de inconsistencias; deuda de migración | Definir plan de migración y eliminar la lectura heredada al cerrarlo |
 | Baja | **Reglas de Firestore sin evidencia de despliegue** | `firestore.rules` presente; sin registro de despliegue | Si producción usa reglas antiguas, la superficie de lectura del cliente cambia | Verificar reglas activas en el proyecto Firebase |
-| Baja | **`AGENTS.md` está en `.gitignore` pero versionado** | `.gitignore:8` y `git ls-files` | Confusión sobre si el archivo debe versionarse | Quitar la línea del `.gitignore` o sacar el archivo del índice |
+| Baja | **`AGENTS.md` movido a `.agents/Instrucciones/` sin regla de ignore en el estado versionado**: la regla se retiró en `b94fcda`; hay un cambio local sin commitear en `.gitignore` al respecto | `git ls-files`; `git status` | Decisión de versionado pendiente | Confirmar la decisión al commitear el cambio local de `.gitignore` |
 
 ### 2) Technical Debt
 
@@ -64,11 +64,11 @@ inyección de rutas en el backend (`documentId` valida el formato en
 
 | Area | Why fragile | Churn signal | Safe change strategy |
 |------|-------------|--------------|----------------------|
-| `jetson/run_bovino.py` (2.728 líneas) | Concentra captura, inferencia, tracker, conteo, métricas y dibujo en un archivo | Reescritura mayor reciente (tracker) y cambios locales sin commitear | Cambios con `py_compile` + harness de tracking; no tocar el detector sin video de prueba |
-| `jetson/lora_jetson_rx.py` (1.706 líneas) | Radio, sesión, worker y protocolo en un solo proceso | Incidentes de SPI/LoRa documentados | Probar con `unittest` y verificar un único propietario del SPI |
+| `jetson/run_bovino.py` (2.735 líneas) | Concentra captura, inferencia, tracker, conteo, métricas y dibujo en un archivo | Reescritura mayor reciente (tracker) y cambios locales sin commitear | Cambios con `py_compile` + harness de tracking; no tocar el detector sin video de prueba |
+| `jetson/lora_jetson_rx.py` (1.561 líneas) | Radio, sesión, worker y protocolo en un solo proceso | Incidentes de SPI/LoRa documentados | Probar con `unittest` y verificar un único propietario del SPI |
 | `backend/src/controllers/ganaderoController.js` | Mezcla compatibilidad heredada, paginación y transacciones | Cambios repetidos en las últimas sesiones | Cubrir con integración antes de refactorizar |
 | `frontend/lib/data/services/esp32_ble_bridge_service.dart` | Orquesta BLE, API, sondeo y errores tipados | Cambios frecuentes por incidencias de campo | Probar con `flutter test` y simular escenarios de fallo |
-| `AGENTS.md` (60 KB) | Bitácora acumulativa; riesgo de contradicción interna | Alta frecuencia de edición | Consolidar secciones antiguas en un apéndice histórico |
+| `.agents/Instrucciones/AGENTS.md` (~65 KB) | Bitácora acumulativa; riesgo de contradicción interna | Alta frecuencia de edición | Consolidar secciones antiguas en un apéndice histórico |
 
 Dato del escáner: los archivos con más cambios en los últimos 90 días fueron
 precisamente los del backend y la app listados arriba
@@ -91,7 +91,7 @@ incluye rutas de `node_modules` porque ese directorio estaba versionado en
 
 ### 7) Evidence
 
-- `docs/codebase/.codebase-scan.txt` (riesgos, churn, ausencia de CI/CD y de linting)
+- `docs/codebase/.codebase-scan.txt` (riesgos, churn y ausencia de linting; escaneo previo al CI de `b94fcda`)
 - `backend/src/`, `frontend/lib/`, `jetson/`, `comunicacion-iot/` (archivos citados en cada fila)
-- `git ls-files`, `git check-ignore`, `.gitignore` (verificación de versionado de credenciales)
+- `git ls-files`, `git check-ignore`, `.gitignore` (versionado de credenciales; la regla de `AGENTS.md` ya no está en el estado versionado)
 - `AGENTS.md` secciones 6, 8, 12 y 13 (incidentes y mediciones previas)

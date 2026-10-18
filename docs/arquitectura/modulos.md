@@ -69,11 +69,11 @@ app a segundo plano y lo reanuda al volver, y la sesión se cierra en
 | Aspecto | Detalle |
 |---------|---------|
 | Responsabilidad | Único propietario del SPI/SX1278, autenticación C1/R1, antirreplay, sesión de conteo y supervisión del worker |
-| Punto de entrada | `jetson/lora_jetson_rx.py:1596` (`main()`), con argparse completo (`:1453`) |
+| Punto de entrada | `jetson/lora_jetson_rx.py:1451` (`main()`), con argparse completo (`:1307`) |
 | Contratos públicos | Trama R1 por LoRa; archivos/logs del worker por stdout y JSON |
 | Dependencias internas | `jetson/secure_protocol.py` |
 | Dependencias externas | `spidev`, radio SX1278 por SPI, subproceso `run_bovino.py` |
-| Evidencia | `jetson/lora_jetson_rx.py:20-63,251-272,1318-1345,1596` |
+| Evidencia | `jetson/lora_jetson_rx.py:20-63,251-272,1213-1245,1451` |
 
 ### Parámetros de operación por defecto
 
@@ -82,9 +82,9 @@ app a segundo plano y lo reanuda al volver, y la sesión se cierra en
 | Bus/dispositivo SPI | `0` / `0`, 10 kHz | `jetson/lora_jetson_rx.py:20-22` |
 | Bloqueo de exclusividad | `fcntl.flock` en `/run/bovisense-spidev0.0.lock` | `jetson/lora_jetson_rx.py:23,251-272` |
 | Worker | `python3 run_bovino.py` en `env_detection` con `--engine`, `--source csi://0`, 1920x1080 a 30 fps | `jetson/lora_jetson_rx.py:48-58` |
-| Límites | 600 s por sesión, 8 s de espera al detener | `jetson/lora_jetson_rx.py:62-63` |
+| Límites | 600 s por sesión, 8 s de espera al detener | `jetson/lora_jetson_rx.py:61-62` |
 | Frecuencia | 433 MHz, SF7, BW 125 kHz, CR 4/5, CRC on, SyncWord `0xF3`, TX 17 dBm | `jetson/lora_jetson_rx.py` (constantes de radio) |
-| GPIO de reset | Eliminado; RST puenteado a 3.3 V y `PIN_DIO0 = 31` solo documental | `jetson/lora_jetson_rx.py:34`, `AGENTS.md` sección 4 |
+| GPIO de reset | Eliminado; RST puenteado a 3.3 V y `PIN_DIO0 = 31` solo documental | `jetson/lora_jetson_rx.py:33`, `AGENTS.md` sección 4 |
 
 ### Protocolo seguro (`secure_protocol.py`)
 
@@ -103,11 +103,11 @@ Evidencia: `jetson/secure_protocol.py:15-100`.
 | Aspecto | Detalle |
 |---------|---------|
 | Responsabilidad | Capturar cámara, ejecutar el engine TensorRT, decodificar detecciones, rastrear identidades y contar |
-| Punto de entrada | `jetson/run_bovino.py:2483` (`main()`), que arma hilos de captura, inferencia y dibujo |
+| Punto de entrada | `jetson/run_bovino.py:2490` (`main()`), que arma hilos de captura, inferencia y dibujo |
 | Contratos públicos | stdout (`WORKER_STATUS\|`, `COUNT_UPDATE\|`, `COUNT_FINAL\|`, `TRACK_METRIC\|`, `INFERENCE_METRIC\|`, `PIPELINE_METRIC\|`, `TRACK_FINAL\|`) y archivos JSON opcionales |
 | Dependencias internas | Tracker interno y GMC propios; helpers de cajas |
 | Dependencias externas | TensorRT, CUDA, OpenCV, numpy, y opcionalmente `trackers` + `supervision` |
-| Evidencia | `jetson/run_bovino.py:26-28,103-155`, `create_tracker` en `:1921` |
+| Evidencia | `jetson/run_bovino.py:26-28,103-174`, `create_tracker` en `:1928` |
 
 ### Selección de tracker
 
@@ -119,7 +119,7 @@ Evidencia: `jetson/secure_protocol.py:15-100`.
 | `simple` | `PersistentBovineTracker` interno | ORB propio | Respaldo sin dependencias externas |
 | `none` | `LegacyUniqueBovineTracker` | No | Reproducir el comportamiento previo, sin tracking |
 
-Evidencia: `jetson/run_bovino.py:1921-1990` y `--tracker` en `:2514`.
+Evidencia: `jetson/run_bovino.py:1928-2005` y `--tracker` en `:2521`.
 
 ## 5. Puente ESP32
 

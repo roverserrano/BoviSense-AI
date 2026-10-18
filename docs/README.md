@@ -4,9 +4,12 @@
 carpeta describe **lo que el repositorio realmente implementa**, con referencia
 al archivo y línea de origen en cada afirmación relevante.
 
-Generado: 2026-10-12. Alcance analizado: rama `dev`, commit `84dc003`
-(`git log --oneline -1`). El árbol de trabajo tenía cambios locales pendientes en
-`jetson/run_bovino.py` al momento del análisis.
+Generado: 2026-10-12 sobre la rama `dev`, commit `84dc003`. Actualizado:
+2026-10-17 con la skill `code-documentation`: se agregó la sección 6, se
+reverificaron los conteos de pruebas (4 unitarias de backend, 12 de integración,
+32 de Flutter, 22 del receptor Jetson y 9 de tracking) y se corrigieron
+referencias de línea y afirmaciones desactualizadas (por ejemplo, el estado del
+CI tras `b94fcda`) en `codebase/` y `arquitectura/`.
 
 ## Cómo leer estos documentos
 
@@ -19,6 +22,18 @@ Marcadores usados en toda la documentación:
 | `Implementación real` | Comportamiento verificado en el código fuente. |
 | `Configuración detectada` | Archivo de configuración presente en el repositorio; no implica que esté desplegado. |
 | `Arquitectura propuesta` | Recomendación de esta documentación, **no** implementada hoy. |
+
+### Skills del proyecto (`.agents/skills/`)
+
+| Skill | Origen | Uso en esta documentación |
+| --- | --- | --- |
+| `acquire-codebase-knowledge` | github/awesome-copilot | Sección 1: conocimiento del código. |
+| `architecture-blueprint-generator` | github/awesome-copilot | Sección 2: blueprint de arquitectura. |
+| `bovisense-plan-consolidator` | Local del proyecto | Sección 5: planificación consolidada. |
+| `code-documentation` | bytedance/deer-flow | Sección 6: documentación de código, CHANGELOG, CONTRIBUTING y README por módulo (2026-10-17). |
+
+Se instalan con `npx skills add <repo> --skill <nombre>`; el registro de las
+instaladas por el CLI está en `skills-lock.json`.
 
 Se excluyeron del análisis los artefactos generados y dependencias:
 `backend/node_modules/` (95 MB), `frontend/build/` (1,3 GB),
@@ -65,7 +80,7 @@ privada se referencian por **nombre de variable** y ruta, nunca por contenido.
 | Documento | Contenido |
 | --- | --- |
 | [seguridad-y-despliegue.md](seguridad-y-despliegue.md) | Protocolo IoT, clave compartida, requisitos de despliegue y reglas de Firestore. Documento preexistente, no modificado. |
-| [../AGENTS.md](../AGENTS.md) | Bitácora de traspaso del proyecto: estado, incidentes resueltos y decisiones acumuladas. |
+| [../.agents/Instrucciones/AGENTS.md](../.agents/Instrucciones/AGENTS.md) | Bitácora de traspaso del proyecto: estado, incidentes resueltos y decisiones acumuladas. |
 | [../README.md](../README.md) | Presentación del producto para lectores no técnicos. |
 | [../comunicacion-iot/docs/](../comunicacion-iot/docs/) | Documentos del protocolo C1/R1 y pinout del hardware. |
 
@@ -81,6 +96,16 @@ privada se referencian por **nombre de variable** y ruta, nunca por contenido.
 | [planning/05-backlog-ejecucion.md](planning/05-backlog-ejecucion.md) | Tareas de ejecución con todos sus campos. |
 | [planning/06-registro-conflictos.md](planning/06-registro-conflictos.md) | Conflictos detectados y decisiones requeridas. |
 | [planning/07-matriz-trazabilidad.md](planning/07-matriz-trazabilidad.md) | Matriz requisito ↔ fuente ↔ tarea ↔ código ↔ prueba. |
+
+### 6. Documentación de código (skill `code-documentation`, 2026-10-17)
+
+| Documento | Contenido |
+| --- | --- |
+| [../CHANGELOG.md](../CHANGELOG.md) | Historial de cambios por fecha y commit (Keep a Changelog). |
+| [../CONTRIBUTING.md](../CONTRIBUTING.md) | Guía para contribuir: entorno, pruebas, convenciones y flujo de trabajo. |
+| [../backend/README.md](../backend/README.md) | Módulo backend: responsabilidades, endpoints, variables y pruebas. |
+| [../frontend/README.md](../frontend/README.md) | Módulo app Flutter: flujo, ejecución USB/WiFi y notas de Android. |
+| [../jetson/README.md](../jetson/README.md) | Módulo Jetson: archivos desplegables, despliegue y pruebas sin hardware. |
 
 ## Resumen ejecutivo del sistema
 

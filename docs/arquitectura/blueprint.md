@@ -174,7 +174,7 @@ despliegue coordinado (`docs/seguridad-y-despliegue.md`).
 | Estados de track y confirmación | `minimum_consecutive_frames` y contador de identidad | `jetson/run_bovino.py:1828-1900` (tracker con librería), `1285-1308` (tracker interno) |
 | Anti doble conteo | `identity_counted_ids`/`counted_track_ids` | `jetson/run_bovino.py:1726-1750`, `1295-1308` |
 | Compensación de movimiento global | ORB + `estimateAffinePartial2D` | `jetson/run_bovino.py:1290-1326` |
-| Degradación con aviso | `create_tracker` cae al tracker interno e imprime el motivo | `jetson/run_bovino.py:1973-1978` |
+| Degradación con aviso | `create_tracker` cae al tracker interno e imprime el motivo | `jetson/run_bovino.py:1979-1985` |
 | Serialización de comandos | `CommandQueue` en la app | `frontend/lib/core/utils/command_queue.dart` |
 | Reintento con espera creciente | `_pollDelay` 4/5/8/12 s | `frontend/lib/data/services/esp32_ble_bridge_service.dart` |
 
@@ -202,10 +202,10 @@ Detalle en [despliegue.md](despliegue.md). Resumen:
 
 - **Nuevo comando IoT**: añadir a `COMMANDS` (`backend/src/services/iotProtocol.js:4`),
   al mapa `SECURE_COMMAND_LABELS` y a `execute_secure_command`
-(`jetson/lora_jetson_rx.py:117,1318`) y, si aplica, al menú de la app.
+(`jetson/lora_jetson_rx.py:117,1213`) y, si aplica, al menú de la app.
 - **Nuevo tracker**: agregar la clase al mapa de `tracker_classes`
   (`jetson/run_bovino.py:1440-1448`) y a `create_tracker`
-  (`jetson/run_bovino.py:1921`). La inferencia no cambia.
+  (`jetson/run_bovino.py:1928`). La inferencia no cambia.
 - **Nueva métrica de conteo**: los contadores ya se publican por
   `summary_fields()` de cada tracker (`jetson/run_bovino.py:1897-1915`).
 - **Nueva pantalla de ganadero**: crear `*_page.dart`, su viewmodel y un método
@@ -214,20 +214,21 @@ Detalle en [despliegue.md](despliegue.md). Resumen:
   (`frontend/lib/views/auth_gate.dart:24-32`), y la validación de rol en
   `backend/src/controllers/usuarioController.js:33`.
 - **Reidentificación global (fase futura)**: el código deja el punto natural en
-  `_match_recent_identity` (`jetson/run_bovino.py:1541`), que hoy usa descriptores
+  `_match_recent_identity` (`jetson/run_bovino.py:1683`), que hoy usa descriptores
   HSV en lugar de un modelo ReID entrenado.
 
 ## 14. Gobernanza de la arquitectura
 
 - **Verificación automática disponible**: `flutter analyze` con
   `flutter_lints`, `py_compile` para los scripts de la Jetson y `npm test` con el
-  runner de Node. No hay verificación de límites de arquitectura ni CI.
+  runner de Node, además del CI de `.github/workflows/ci.yml` (4 jobs) desde
+  `b94fcda`. No hay verificación de límites de arquitectura ni de hardware/despliegue.
 - **Documentación de decisiones**: `AGENTS.md` funciona como bitácora de
   incidentes y decisiones; `docs/seguridad-y-despliegue.md` fija los cambios
   incompatibles de protocolo.
-- **Práctica recomendada** (no implementada): pipeline de CI con los tres
-  conjuntos de pruebas y una verificación de que app, firmware y receptor
-  comparten la misma versión de protocolo.
+- **Práctica recomendada** (no implementada): validación en hardware y una
+  verificación de que app, firmware y receptor comparten la misma versión de
+  protocolo; las suites de pruebas ya corren en `.github/workflows/ci.yml`.
 
 ## 15. Registro de decisiones arquitectónicas (ADR)
 
@@ -264,9 +265,11 @@ modificar el archivo `usuarioRoute.js` (no está montado).
 ## 17. Mantenimiento de este blueprint
 
 Generado el 2026-10-12 a partir del commit `84dc003` y del árbol de trabajo con
-los cambios locales de `jetson/run_bovino.py`. Debe actualizarse cuando cambie
-alguno de estos elementos: protocolo C1/R1, esquema de Firestore, contratos HTTP,
-selección de tracker, o topología de despliegue.
+los cambios locales de `jetson/run_bovino.py`. Actualizado parcialmente el
+2026-10-17: referencias de línea y estado de CI reverificados contra `b94fcda`.
+Debe actualizarse cuando cambie alguno de estos elementos: protocolo C1/R1,
+esquema de Firestore, contratos HTTP, selección de tracker, o topología de
+despliegue.
 
 ## Evidencia consolidada
 

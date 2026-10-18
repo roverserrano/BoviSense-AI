@@ -10,9 +10,9 @@
 | Archivos JS | `camelCase` para utilidades; dominio en singular/plural según recurso | `iotService.js`, `ganaderoRoutes.js`, `passwordGenerator.js` | `backend/src/services/`, `backend/src/routes/` |
 | Archivos Python | `snake_case` | `lora_jetson_rx.py`, `secure_protocol.py` | `jetson/` |
 | Clases Dart/JS | `PascalCase` | `ApiClient`, `SessionNotifier`, `HttpError` | `frontend/lib/data/services/api_client.dart:25`, `backend/src/utils/validation.js:1` |
-| Funciones/métodos | `camelCase` (Dart/JS) y `snake_case` (Python) | `commandFrame()`, `execute_secure_command()` | `backend/src/services/iotProtocol.js:21`, `jetson/lora_jetson_rx.py:1318` |
+| Funciones/métodos | `camelCase` (Dart/JS) y `snake_case` (Python) | `commandFrame()`, `execute_secure_command()` | `backend/src/services/iotProtocol.js:21`, `jetson/lora_jetson_rx.py:1213` |
 | Campos privados | Prefijo `_` | `_repository`, `_pollFailures`, `_errorMessage` | `frontend/lib/data/services/esp32_ble_bridge_service.dart` |
-| Constantes de módulo | `MAYÚSCULAS_CON_GUIONES` | `FRAME_QUEUE_SIZE`, `COUNT_MAX_DURATION_SEC`, `HEX_ID` | `jetson/run_bovino.py:20-21`, `jetson/lora_jetson_rx.py:62` |
+| Constantes de módulo | `MAYÚSCULAS_CON_GUIONES` | `FRAME_QUEUE_SIZE`, `COUNT_MAX_DURATION_SEC`, `HEX_ID` | `jetson/run_bovino.py:20-21`, `jetson/lora_jetson_rx.py:61` |
 | Variables de entorno | `SCREAMING_SNAKE` | `IOT_SHARED_SECRET`, `BOVISENSE_STATE_DIR` | `backend/src/app.js:74`, `jetson/secure_protocol.py:16` |
 | Claves JSON de la API | `snake_case` en español de dominio | `cantidad_detectada`, `next_cursor`, `session_id` | `backend/src/controllers/ganaderoController.js:80-94` |
 

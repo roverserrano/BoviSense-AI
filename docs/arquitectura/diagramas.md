@@ -29,7 +29,7 @@ graph TB
 
 Fuente: `backend/src/app.js:59-60`, `backend/vercel.json`,
 `frontend/lib/main.dart:127-160`, `frontend/lib/data/services/esp32_ble_bridge_service.dart`,
-`jetson/lora_jetson_rx.py:1318`, `jetson/run_bovino.py:2483`,
+`jetson/lora_jetson_rx.py:1213`, `jetson/run_bovino.py:2490`,
 `comunicacion-iot/esp32/.../*.ino:31-47`.
 
 ```mermaid
@@ -206,7 +206,7 @@ sequenceDiagram
 
 Fuente: `frontend/lib/data/services/esp32_ble_bridge_service.dart`,
 `backend/src/services/iotService.js:11-103`,
-`jetson/lora_jetson_rx.py:1318-1345`, `jetson/secure_protocol.py:60-100`,
+`jetson/lora_jetson_rx.py:1213-1245`, `jetson/secure_protocol.py:60-100`,
 `backend/src/controllers/ganaderoController.js:329-368`.
 
 ```mermaid

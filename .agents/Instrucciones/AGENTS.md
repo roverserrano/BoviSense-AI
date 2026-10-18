@@ -1020,3 +1020,152 @@ prueba y pendiente de decision (migrar datos o contar ids unicos).
 Copiar `jetson/lora_jetson_rx.py` y `jetson/secure_protocol.py` a
 `/home/cow/Documents/Script/`, reiniciar `bovisense-lora.service`, confirmar en el
 log que una trama sin firma se descarta y que el flujo C1/R1 sigue funcionando.
+
+## 24. Documentacion generada y correcciones de desfases (2026-10-17)
+
+Sesion de documentacion. La skill `code-documentation` quedo instalada en
+`.agents/skills/code-documentation` (con registro en `skills-lock.json`, que si
+esta versionado).
+
+### Artefactos
+
+- Nuevos: `CHANGELOG.md`, `CONTRIBUTING.md`, `backend/README.md` y
+  `.agents/Instrucciones/InformeAuditoria.md` (el informe de auditoria, aportado
+  por el usuario).
+- `frontend/README.md` reescrito (reemplaza la plantilla generada por Flutter);
+  `jetson/README.md`, `README.md` raiz y `docs/README.md` actualizados como
+  indices.
+- Un subagente corrigio desfases en `docs/codebase/*` y
+  `docs/arquitectura/*`: referencias de linea reverificadas contra `b94fcda`,
+  estado real del CI (existe, 4 jobs), conteos de pruebas y ruta
+  `.agents/Instrucciones/AGENTS.md`. Verificacion de enlaces: 0 rotos en los 7
+  archivos revisados.
+- `docs/planning/` no se toco (registro historico del usuario).
+
+### Pendientes de decision que quedaron documentados
+
+- No existe `LICENSE`; el README no lo menciona a proposito.
+- El `.gitignore` local (sin commitear) reintroduce reglas que ignoran
+  `AGENTS.md`, `skills-lock.json`, `firebase.json`, `google-services.json` y
+  `/frontend/run_usb.sh`, contra el estado versionado, donde son parte del
+  proyecto. Decision del usuario; no se toco.
+
+## 25. Mejoras del Informe de Auditoria (2026-10-17)
+
+Se ejecuto la parte de `.agents/Instrucciones/InformeAuditoria.md`
+(sobre `dev@b94fcda`) que no depende de hardware ni de decisiones de producto:
+los dos P0 y los P1 de contrato, recuperacion, cierre y cola de comandos. El
+informe completo, con las fichas BOV-HIGH/MED/LOW y el backlog T01-T14, sigue en
+`.agents/Instrucciones/InformeAuditoria.md`; alli viven los pendientes.
+
+### Cambios realizados
+
+1. **BOV-HIGH-001 (P0) — replay del protocolo.** `iotService.verify` ya no
+   reaplica transiciones cuando la respuesta ya estaba verificada: devuelve el
+   resultado cacheado (misma trama) sin tocar `IotDevices`/`IotSessions`.
+   Ademas, la liberacion por `IDLE` quedo limitada a la sesion que el backend
+   cree activa o al dueno del lease (`uid`): un `IDLE` de otro usuario, o fuera
+   de orden, ya no puede tumbar la reserva vigente. Antes, un replay de un
+   ticket de A durante una sesion de B liberaba la sesion de B (reproducido).
+2. **BOV-HIGH-004 (P0) — terminacion forzada.** En `lora_jetson_rx.stop()`, si
+   el worker no atiende `SIGTERM` y hay que usar `SIGKILL`, la respuesta es
+   `ERROR` con detalle `forced_termination` y sin conteo (el ultimo acumulado no
+   es confiable); antes se respondia `STOPPED` con ese conteo y la app podia
+   guardarlo como final. El backend ya no emite prueba terminal para `ERROR` y
+   `POST /conteos` lo rechaza.
+3. **BOV-HIGH-002 (P1) — contrato de `H`.** `status()` sin sesion solicitada
+   (comando `H`) responde disponibilidad: `IDLE` sin sesion alguna,
+   `RUNNING` durante el conteo (sin filtrar el conteo en curso) y `READY` al
+   terminar. Antes respondia el ultimo `STOPPED` con su conteo y sesion `-`, y
+   el backend rechazaba la trama ("Fecha de finalizacion invalida"). `Q` de una
+   sesion finalizada ahora responde con la fecha de cierre original, no una
+   fabricada al responder.
+4. **BOV-HIGH-003 (P1, lado receptor) — recuperacion durable.**
+   `finish_session` persiste el final en la tabla `results` de SQLite antes de
+   responder (`persist_result`), y `R`/`T`/`Q` recuperan ese resultado tras un
+   reinicio del receptor (`recover_stored_result`), con la sesion y la fecha de
+   cierre originales. La app aun no ofrece el flujo de "recuperar pendiente"
+   tras reconexion (parte movil del hallazgo, pendiente).
+5. **BOV-HIGH-006 (P1) — cierre limpio.** El receptor instala un manejador de
+   `SIGTERM` (`shutdown_signal_handler` -> `KeyboardInterrupt`) para que el
+   `finally` de `main` detenga el worker y cierre el SPI; con el manejador por
+   defecto el proceso moria sin limpiar y el worker quedaba huerfano.
+6. **BOV-MED-001 (P1) — paginacion con fechas iguales.** Cursor compuesto
+   `fechaEnMillis_id` en `ganaderoController.listOwnedMerged`, orden
+   descendente que desempata por id y `startAfter` compuesto en la
+   subcoleccion; la coleccion heredada se filtra en memoria con el mismo
+   criterio (ventana acotada de 200). Los grupos mas grandes que la pagina se
+   recorren en varias paginas en vez de perderse. Se acepta un cursor antiguo
+   (solo fecha) con la semantica anterior.
+7. **BOV-MED-003 (P1) — cola de comandos BLE.** `CommandQueue.invalidate()`
+   descarta lo pendiente; el servicio invalida la cola al desconectar,
+   reconectar, apagar el Bluetooth o disponerse; la sesion vigente se captura
+   al encolar; y `issueCommand` envia `session_id` explicito cuando se conoce,
+   para que el backend no convierta el comando contra una sesion nueva.
+
+### Archivos modificados
+
+- `backend/src/services/iotService.js`,
+  `backend/src/controllers/ganaderoController.js`,
+  `backend/test/integration/api.test.js` (3 pruebas nuevas).
+- `jetson/lora_jetson_rx.py`, `jetson/test_secure_protocol.py` (7 pruebas
+  nuevas).
+- `frontend/lib/core/utils/command_queue.dart`,
+  `frontend/lib/data/services/esp32_ble_bridge_service.dart`,
+  `frontend/lib/data/repositories/ganadero_repository.dart`,
+  `frontend/test/command_queue_test.dart` (2 pruebas nuevas).
+- `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/codebase/TESTING.md`,
+  `frontend/README.md`, `jetson/README.md` (conteos de pruebas al dia).
+
+### Pruebas ejecutadas
+
+| Prueba | Comando | Resultado |
+| --- | --- | --- |
+| Backend unitario | `cd backend && npm test` | 4/4 |
+| Backend integracion | `firebase emulators:exec --only auth,firestore --project demo-bovisense "npm --prefix backend run test:integration"` con JDK 21 | 15/15 (3 nuevas) |
+| Jetson receptor | `cd jetson && python3 -m unittest test_secure_protocol.py` | 29/29 (7 nuevas) |
+| Jetson tracking | `cd jetson && python3 -m unittest test_tracking_logic.py` | 9/9 |
+| Flutter analisis | `cd frontend && flutter analyze` | sin hallazgos |
+| Flutter tests | `cd frontend && flutter test` | 34/34 (2 nuevas) |
+| Formato Dart | `dart format --output=none --set-exit-if-changed lib test` | sin cambios pendientes |
+| Sintaxis Jetson | `python3 -m py_compile` de los tres scripts | correcto |
+
+Nota de las pruebas Jetson nuevas: la de terminacion forzada usa un proceso hijo
+real que ignora `SIGTERM` (con handshake de preparacion) para reproducir el
+`SIGKILL`; la de recuperacion usa una base SQLite temporal. Ninguna toca el
+SX1278.
+
+### Hallazgos de la auditoria NO ejecutados en esta sesion
+
+- **BOV-HIGH-005** (watchdog de captura del worker): requiere validacion con
+  camara/Argus real; no se toco `run_bovino.py` en esta sesion.
+- **BOV-HIGH-007/HIGH-008** (identidad unica del tracking y auditoria del
+  modelo): dependen de un protocolo de campo y de artefactos del modelo que no
+  estan en el repositorio.
+- **BOV-HIGH-003 parte movil**: recuperar el resultado pendiente despues de una
+  reconexion (persistir la sesion en la app y ofrecer "Recuperar resultado").
+- **BOV-MED-002** (coleccion heredada), **MED-004** (umbrales del tracker),
+  **MED-005** (TTL/memoria), **MED-006/MED-007** (BLE/brownout, hardware),
+  **MED-008** (despliegue reproducible), **MED-009** (autoedicion admin),
+  **MED-010** (reconciliacion por 401/403) y **LOW-001/LOW-002**: decisiones de
+  producto/hardware o cambios de mayor alcance; el informe los deja como
+  propuestas.
+
+### Despliegue de esta sesion
+
+- Jetson: copiar `jetson/lora_jetson_rx.py` a `/home/cow/Documents/Script/` y
+  reiniciar `bovisense-lora.service` (el backend, si corre con `npm run dev`, se
+  recarga solo; la app solo necesita hot restart).
+- Sin commit: todos los cambios siguen locales, como el resto del arbol.
+
+### Siguiente paso recomendado
+
+1. Sesion real `H -> S -> Q -> T -> R` con la version nueva del receptor:
+   comprobar que `H` responde `READY`/`RUNNING` (nunca el `STOPPED` viejo),
+   que detener deja `STOPPED` guardable y que un cierre forzado responde
+   `ERROR`.
+2. Probar el reinicio del receptor en medio de un conteo: `R` debe recuperar el
+   resultado persistido con la fecha original.
+3. Decidir los pendientes de producto (coleccion heredada, TTL, brownout,
+   autoedicion admin) antes de planear hardware.
+

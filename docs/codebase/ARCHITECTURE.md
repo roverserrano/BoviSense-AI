@@ -8,7 +8,7 @@
 |--------|----------------------|--------------------------|
 | Backend | **En capas**: rutas → controladores → servicios → Firebase Admin | `backend/src/routes/*.js` solo declara rutas y autorización; `backend/src/app.js:59-68` monta routers y el manejador de errores; la lógica de dominio vive en `services/` sin `req`/`res` (`backend/src/services/userService.js:5`) |
 | App Flutter | **MVVM con repositorios**: vista → `ChangeNotifier` → repositorio → servicio | `frontend/lib/main.dart:127-160` (`_SessionScope` con `MultiProvider`) registra viewmodels y repositorios; los viewmodels extienden `SessionNotifier` (`frontend/lib/viewmodels/session_notifier.dart:3`) y las vistas consumen `context.watch<...ViewModel>()` |
-| Jetson | **Dos procesos cooperativos**: receptor de radio (estado de sesión) + worker de inferencia | `jetson/lora_jetson_rx.py` lanza y supervisa el worker (`COUNT_SCRIPT_PATH`, `jetson/lora_jetson_rx.py:50`), lee sus archivos de estado y líneas de log (`jetson/lora_jetson_rx.py:993-998`) |
+| Jetson | **Dos procesos cooperativos**: receptor de radio (estado de sesión) + worker de inferencia | `jetson/lora_jetson_rx.py` lanza y supervisa el worker (`COUNT_SCRIPT_PATH`, `jetson/lora_jetson_rx.py:49`), lee sus archivos de estado y líneas de log (`jetson/lora_jetson_rx.py:841-903`) |
 | ESP32 | **Relay opaco sin lógica de dominio** | El sketch solo valida prefijo y longitud de la trama y la reenvía (`bridge_hotspot_lora_discovery.ino:245-249`) |
 
 No se observan patrones de Clean Architecture (no hay capas `domain/`,
@@ -58,7 +58,7 @@ Pasos con evidencia:
 3. El ESP32 solo reenvía: `bridge_hotspot_lora_discovery.ino:245-249`.
 4. La Jetson autentica y ejecuta:
    `jetson/secure_protocol.py:26-48` (`parse_command`) y
-   `jetson/lora_jetson_rx.py:1318-1345` (`execute_secure_command`).
+   `jetson/lora_jetson_rx.py:1213-1245` (`execute_secure_command`).
 5. La app verifica la respuesta antes de mostrarla:
    `frontend/lib/data/services/esp32_ble_bridge_service.dart` (llamada a
    `verifyResponse`) y `backend/src/services/iotService.js:69-103`.
@@ -88,10 +88,10 @@ Pasos con evidencia:
 | Dependency injection por árbol de widgets | `frontend/lib/main.dart:127-160` | Repositorios y viewmodels se destruyen al cambiar de sesión |
 | Idempotencia por huella + lease | `backend/src/services/userService.js:12-34` | Evitar altas/ediciones duplicadas si el cliente reintenta |
 | Antirreplay persistente | `jetson/secure_protocol.py:60-96` | Impedir que una trama reenviada se ejecute dos veces tras un reinicio |
-| Estrategia (selección de tracker) | `jetson/run_bovino.py:1921-1985` (`create_tracker`) | Comparar BoT-SORT/ByteTrack/OC-SORT/interno sin tocar la inferencia |
-| Filtro adaptativo (Kalman) + GMC | `jetson/run_bovino.py:1316-1326`, librería `trackers` | Compensar el movimiento del dron y mantener identidad temporal |
+| Estrategia (selección de tracker) | `jetson/run_bovino.py:1928-2005` (`create_tracker`) | Comparar BoT-SORT/ByteTrack/OC-SORT/interno sin tocar la inferencia |
+| Filtro adaptativo (Kalman) + GMC | `jetson/run_bovino.py:1322-1332`, librería `trackers` | Compensar el movimiento del dron y mantener identidad temporal |
 | Cola serializada | `frontend/lib/core/utils/command_queue.dart` | Evitar comandos BLE solapados entre el sondeo y el usuario |
-| Degradación con aviso | `jetson/run_bovino.py:1973-1978` | Si la librería de tracking no está, sigue con el tracker interno y lo registra |
+| Degradación con aviso | `jetson/run_bovino.py:1979-1985` | Si la librería de tracking no está, sigue con el tracker interno y lo registra |
 | Adaptador serverless | `backend/api/index.js:1-3` | Reutilizar la misma app Express en Vercel |
 
 ### 5) Known Architectural Risks
@@ -153,8 +153,8 @@ run_bovino.py (proceso 2: captura en hilos -> inferencia -> tracker)
 lora_jetson_rx.py lee ambos y los traduce a la trama R1
 ```
 
-Evidencia: `jetson/run_bovino.py:26-28,103-155` (salidas del worker) y
-`jetson/lora_jetson_rx.py:993-998,1058-1060` (lectura de hooks del worker).
+Evidencia: `jetson/run_bovino.py:26-28,103-174` (salidas del worker) y
+`jetson/lora_jetson_rx.py:841-903,937-961` (lectura de hooks del worker).
 
 ### Postura de resiliencia (resumen)
 
@@ -165,4 +165,4 @@ Evidencia: `jetson/run_bovino.py:26-28,103-155` (salidas del worker) y
 | Pérdida del puente BLE | Error tipado y aviso en pantalla | `frontend/lib/data/services/esp32_ble_bridge_service.dart` (`failureMessage`) |
 | Caída del sondeo del conteo | Reintento con espera creciente (4/5/8/12 s) | `frontend/lib/data/services/esp32_ble_bridge_service.dart` (`_scheduleCountPoll`) |
 | Backend inalcanzable desde el teléfono | Mensaje con la causa y el comando `adb reverse` | `frontend/lib/data/services/api_client.dart:182-196` |
-| Librería de tracking ausente | Degradación a tracker interno con aviso | `jetson/run_bovino.py:1973-1978` |
+| Librería de tracking ausente | Degradación a tracker interno con aviso | `jetson/run_bovino.py:1979-1985` |

@@ -23,7 +23,7 @@ de build (`docs/codebase/.codebase-scan.txt`, sección `MONOREPO SIGNALS`).
 | `comunicacion-iot/` | Firmware del puente y documentación de hardware/protocolo | `comunicacion-iot/esp32/.../*.ino`, `comunicacion-iot/docs/` |
 | `docs/` | Documentación técnica (esta carpeta) y despliegue/seguridad | `docs/README.md`, `docs/seguridad-y-despliegue.md` |
 | `firestore.rules`, `firebase.json` | Seguridad de Firestore y configuración de emuladores | `firebase.json:1-10` |
-| `README.md`, `AGENTS.md` | Presentación del producto y bitácora de traspaso técnico | `README.md`, `AGENTS.md` |
+| `README.md`, `.agents/Instrucciones/AGENTS.md` | Presentación del producto y bitácora de traspaso técnico | `README.md`, `.agents/Instrucciones/AGENTS.md` |
 | `.agents/skills/` | Skills instaladas para análisis de código y arquitectura | `skills-lock.json` |
 
 ### 2) Entry Points
@@ -35,15 +35,15 @@ de build (`docs/codebase/.codebase-scan.txt`, sección `MONOREPO SIGNALS`).
 - **Backend serverless**: `backend/api/index.js` reexporta la app, y
   `backend/vercel.json` enruta todo el tráfico a esa función con
   `maxDuration: 30`.
-- **App**: `frontend/lib/main.dart:22` (`Future<void> main()`), que inicializa
+- **App**: `frontend/lib/main.dart:21` (`Future<void> main()`), que inicializa
   Firebase y monta `BoviSenseApp`; la sesión se resuelve en
   `frontend/lib/views/auth_gate.dart:11-33`.
-- **Receptor Jetson**: `jetson/lora_jetson_rx.py:1596` (`def main()`), ejecutado
+- **Receptor Jetson**: `jetson/lora_jetson_rx.py:1451` (`def main()`), ejecutado
   por `bovisense-lora.service` con `EnvironmentFile=/etc/bovisense/iot.env`
   (`AGENTS.md`, sección 4).
-- **Detector Jetson (worker)**: `jetson/run_bovino.py:2461` (`def main()`),
+- **Detector Jetson (worker)**: `jetson/run_bovino.py:2490` (`def main()`),
   lanzado como subproceso por el receptor
-  (`jetson/lora_jetson_rx.py:1086` define `--source` del worker).
+  (`jetson/lora_jetson_rx.py:981` define `--source` del worker).
 - **Puente ESP32**: `setup()`/`loop()` del sketch
   (`comunicacion-iot/esp32/.../*.ino:384-497`), sin binario compilado en el repo.
 - **Scripts de ayuda**: `frontend/run_usb.sh` (publica el puerto con `adb reverse`
@@ -92,8 +92,8 @@ importan `http` (ningún archivo de `frontend/lib/views` importa
 ### 5) Evidence
 
 - `backend/src/app.js:59-61` (montaje de routers)
-- `frontend/lib/main.dart:22-60` (arranque de la app)
-- `jetson/lora_jetson_rx.py:1453-1596` (argumentos y `main`)
+- `frontend/lib/main.dart:21-60` (arranque de la app)
+- `jetson/lora_jetson_rx.py:1307-1561` (argumentos y `main`)
 - `docs/codebase/.codebase-scan.txt` (árbol de directorios y métricas)
 - `git ls-files` para distinguir código fuente de artefactos
 
@@ -108,9 +108,9 @@ importan `http` (ningún archivo de `frontend/lib/views` importa
 | `frontend/{ios,linux,macos,web,windows}/` | Andamiaje generado por Flutter; sin uso declarado | `ls -d frontend/{ios,linux,macos,web,windows}` y `frontend/lib/firebase_options.dart:43-85` |
 | `frontend/README.md` | README genérico de Flutter, sin contenido del proyecto | `frontend/README.md:1-5` |
 
-### Archivos de trabajo sin seguimiento en Git (al momento del análisis)
+### Archivos de trabajo sin seguimiento en Git (estado al 2026-10-17)
 
-`git status --short` reportaba como no versionados: `.agents/` (skills),
-`docs/README.md` y `docs/codebase/` (esta documentación), `jetson/tracking.md`
-(especificación de trabajo del tracker) y `skills-lock.json`. Los cambios locales
-en `jetson/run_bovino.py` estaban sin commitear.
+`git status --short` reporta como no versionados: `.agents/skills/` (4 skills),
+`.agents/Instrucciones/README.md` y `jetson/tracking.md` (especificación de
+trabajo del tracker MOT). Los archivos de trabajo `revicion.txt`, `pasos.txt` y
+`.codex` están en `.agents/Instrucciones/` y siguen ignorados por git.

@@ -45,9 +45,9 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-a
 | Módulo | Ubicación | Nomenclatura | Casos |
 |--------|-----------|--------------|-------|
 | Backend unitario | `backend/test/security.test.js` | `<tema>.test.js` | 4 |
-| Backend integración | `backend/test/integration/api.test.js` | `<tema>.test.js` bajo `integration/` | 12 |
-| App | `frontend/test/**` | `<tema>_test.dart` | 32 |
-| Jetson (receptor y protocolo) | `jetson/test_secure_protocol.py` | `test_<tema>.py` | 22 |
+| Backend integración | `backend/test/integration/api.test.js` | `<tema>.test.js` bajo `integration/` | 15 |
+| App | `frontend/test/**` | `<tema>_test.dart` | 34 |
+| Jetson (receptor y protocolo) | `jetson/test_secure_protocol.py` | `test_<tema>.py` | 29 |
 | Jetson (tracking y conteo) | `jetson/test_tracking_logic.py` | `test_<tema>.py` | 9 |
 
 Detalle de la app (`rg -c "^\s*(test|testWidgets)\("`):
@@ -60,7 +60,7 @@ Detalle de la app (`rg -c "^\s*(test|testWidgets)\("`):
 | `test/auth_views_test.dart` | 3 | Reglas del splash, enlace de WhatsApp, confirmación de logout |
 | `test/alert_item_test.dart` | 2 | Alerta leída/no leída |
 | `test/ble_failure_test.dart` | 2 | Traducción de fallas de Bluetooth y textos |
-| `test/command_queue_test.dart` | 2 | Serialización y fallo que no corta la cola |
+| `test/command_queue_test.dart` | 4 | Serialización, fallo que no corta la cola e invalidación al desconectar |
 | `test/exit_confirm_test.dart` | 2 | Diálogo de salida y `onBack` |
 | `test/widget_test.dart` | 1 | Marcador de posición de la plantilla |
 
@@ -71,8 +71,8 @@ autoabastece de dobles.
 
 | Scope | Covered? | Typical target | Notes |
 |-------|----------|----------------|-------|
-| Unit | Sí | Validación, protocolo C1/R1, utilidades de cajas, cola de comandos, formateadores | Backend 4; app 20; Jetson 21 |
-| Integration | Sí | API completa contra emuladores de Firebase; receptor con SPI simulado | 10 casos de backend; las pruebas de la Jetson simulan el SX1278 |
+| Unit | Sí | Validación, protocolo C1/R1, utilidades de cajas, cola de comandos, formateadores | Backend 4; app 34; Jetson 29 |
+| Integration | Sí | API completa contra emuladores de Firebase; receptor con SPI simulado | 15 casos de backend; las pruebas de la Jetson simulan el SX1278 |
 | E2E (dispositivo real) | No | Flujo `H → S → Q → T → R` con radio, cámara y teléfono | PENDIENTE DE VERIFICACIÓN: requiere hardware (`AGENTS.md`, secciones 6 y 8) |
 
 ### 4) Mocking and Isolation Strategy
@@ -100,8 +100,8 @@ autoabastece de dobles.
 
 - Umbral de cobertura: no configurado (`PENDIENTE DE VERIFICACIÓN`: no hay
   `jest.config`, `.nycrc` ni `--coverage` en los scripts).
-- Última ejecución (2026-10-12): backend unitario en verde, **12/12** integración,
-  `flutter analyze` sin hallazgos, 32/32 app, **22/22** receptor y **9/9**
+- Última ejecución (2026-10-17): backend unitario en verde, **15/15** integración,
+  `flutter analyze` sin hallazgos, 34/34 app, **29/29** receptor y **9/9**
   tracking; `py_compile` de los tres scripts de la Jetson.
 - Huecos conocidos: sin pruebas de UI end-to-end, sin pruebas de resiliencia de
   red, sin cobertura instrumentada y sin prueba de la publicación de hooks del
@@ -115,8 +115,8 @@ autoabastece de dobles.
 
 - `backend/package.json:6-11`, `backend/test/security.test.js`,
   `backend/test/integration/api.test.js`
-- `frontend/test/` (9 archivos, 32 casos)
-- `jetson/test_secure_protocol.py` (21 casos)
+- `frontend/test/` (9 archivos, 34 casos)
+- `jetson/test_secure_protocol.py` (29 casos)
 - `docs/codebase/.codebase-scan.txt` (sección PERFORMANCE & TESTING)
 - `AGENTS.md` sección 8 (resultados de la última corrida)
 

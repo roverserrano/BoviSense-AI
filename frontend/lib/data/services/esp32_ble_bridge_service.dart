@@ -366,6 +366,7 @@ class Esp32BleBridgeService extends SessionNotifier {
   Future<void> scanAndConnect() async {
     if (disposed || isBusy || isConnected) return;
     final generation = ++_generation;
+    _commands.invalidate();
     _errorMessage = null;
     _failure = Esp32BleBridgeFailure.none;
     _otherBluetoothDevices = const [];
@@ -667,6 +668,10 @@ class Esp32BleBridgeService extends SessionNotifier {
         _state == Esp32BleBridgeState.connecting;
     _failure = Esp32BleBridgeFailure.bluetoothOff;
     _errorMessage = failureMessage(Esp32BleBridgeFailure.bluetoothOff);
+    // El apagado invalida lo encolado o en vuelo: se ejecutaria contra una
+    // conexion que ya no existe.
+    ++_generation;
+    _commands.invalidate();
     if (active) unawaited(_release());
     _setState(Esp32BleBridgeState.adapterOff);
   }
@@ -721,12 +726,30 @@ class Esp32BleBridgeService extends SessionNotifier {
   /// Encola un comando hacia el equipo.
   ///
   /// Encolar en vez de rechazar evita que el sondeo automatico (que dura
-  /// varios segundos) bloquee "Detener" o "Actualizar conteo".
-  Future<void> sendCommand(String command) {
-    return _commands.add(() => _sendCommand(command));
+  /// varios segundos) bloquee "Detener" o "Actualizar conteo". El contexto se
+  /// captura al encolar (sesion vigente en ese momento) y la cola se invalida
+  /// al desconectar o reconectar: una tarea de una conexion anterior no debe
+  /// ejecutarse contra la conexion siguiente.
+  Future<void> sendCommand(String command) async {
+    final sessionId = sessionCommands.contains(command)
+        ? _sessionForCommand()
+        : null;
+    await _commands.add<void>(
+      () => _sendCommand(command, sessionId: sessionId),
+    );
   }
 
-  Future<void> _sendCommand(String command) async {
+  /// Sesion vigente para un comando de sesion, capturada al encolar.
+  ///
+  /// `null` si la app no conoce una sesion real ('none' o el marcador local):
+  /// en ese caso el backend decide con la sesion activa del equipo.
+  String? _sessionForCommand() {
+    final sessionId = _latestCountStatus?.sessionId;
+    if (sessionId == null || sessionId.length != 32) return null;
+    return sessionId;
+  }
+
+  Future<void> _sendCommand(String command, {String? sessionId}) async {
     if (disposed || !isConnected || _rx == null) {
       throw Exception('Conecta primero el puente BLE.');
     }
@@ -740,7 +763,11 @@ class Esp32BleBridgeService extends SessionNotifier {
         'Solicitando ticket: $command -> ${_repository.apiBaseOrigin}',
         direction: 'API',
       );
-      final ticket = await _repository.issueCommand(command, newRequestId());
+      final ticket = await _repository.issueCommand(
+        command,
+        newRequestId(),
+        sessionId: sessionId,
+      );
       if (!_current(generation) || !isConnected) {
         throw Exception('Conexion interrumpida.');
       }
@@ -927,6 +954,7 @@ class Esp32BleBridgeService extends SessionNotifier {
 
   Future<void> disconnect() async {
     ++_generation;
+    _commands.invalidate();
     _latestCountStatus = null;
     _latestJetsonStatus = null;
     _setState(Esp32BleBridgeState.disconnected);
@@ -936,6 +964,7 @@ class Esp32BleBridgeService extends SessionNotifier {
   @override
   void dispose() {
     ++_generation;
+    _commands.invalidate();
     super.dispose();
     unawaited(_adapterWatch?.cancel() ?? Future<void>.value());
     unawaited(_release());

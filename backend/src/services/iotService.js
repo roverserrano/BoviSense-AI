@@ -74,7 +74,22 @@ function createIotService(db) {
             if (!data || data.uid !== uid || data.session_id !== result.sessionId) throw new HttpError(403, 'Respuesta ajena a la solicitud.');
             const now = Math.floor(Date.now() / 1000);
             if (data.response && data.response !== raw) throw new HttpError(409, 'La solicitud ya tiene otra respuesta.');
-            if (!data.response && (result.timestamp < data.issued - 5 || result.timestamp > data.expires + 30 || Math.abs(now - result.timestamp) > 300)) {
+            if (data.response) {
+                // Respuesta ya verificada (replay): se devuelve el resultado
+                // cacheado sin reaplicar transiciones. Antes se repetian los
+                // efectos y un IDLE antiguo podia liberar la reserva de la
+                // sesion que estuviera activa en ese momento, incluso de otro
+                // usuario.
+                const wasTerminal = ['STOPPED', 'RESULT'].includes(result.status) && result.count !== null;
+                return {
+                    status: result.status,
+                    session: result.sessionId,
+                    count: result.count === null ? 'unknown' : String(result.count),
+                    device_id: deviceId(),
+                    proof: wasTerminal ? raw : null,
+                };
+            }
+            if (result.timestamp < data.issued - 5 || result.timestamp > data.expires + 30 || Math.abs(now - result.timestamp) > 300) {
                 throw new HttpError(409, 'Respuesta vencida. Consulta de nuevo el resultado.');
             }
             const terminal = ['STOPPED', 'RESULT'].includes(result.status) && result.count !== null;
@@ -97,7 +112,15 @@ function createIotService(db) {
             // reinicio o el worker termino fuera de la app). Si no se libera
             // aqui, el siguiente INICIARCONTEO se convierte en ESTADOCONTEO
             // contra una sesion que ya no existe y la app queda atascada.
-            if (result.status === 'IDLE' && device.data()?.session_id) {
+            //
+            // Solo se libera la reserva propia: la respuesta debe referirse a
+            // la sesion que el backend cree activa, o (en una consulta H sin
+            // sesion) pertenecer al uid del lease. Un IDLE de otro usuario, o
+            // fuera de orden, no debe tumbar la sesion vigente.
+            const deviceData = device.data() || {};
+            const ownsLease = deviceData.session_id === result.sessionId
+                || (result.sessionId === '-' && deviceData.uid === uid);
+            if (result.status === 'IDLE' && deviceData.session_id && ownsLease) {
                 tx.update(device.ref, { lease_until: 0, session_id: FieldValue.delete() });
             }
             return { status: result.status, session: result.sessionId, count: result.count === null ? 'unknown' : String(result.count), device_id: deviceId(), proof: terminal ? raw : null };

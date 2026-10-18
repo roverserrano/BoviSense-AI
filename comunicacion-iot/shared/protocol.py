@@ -1,4 +1,10 @@
-"""Protocolo JSON seguro para Wi-Fi <-> ESP32 <-> LoRa <-> Jetson."""
+"""Etapa historica (JSON/WebSocket con checksum): no es el protocolo vigente.
+
+Pertenece al diseno Wi-Fi/JSON descartado; el enlace actual usa las tramas C1/R1
+con HMAC-SHA256 (ver `jetson/secure_protocol.py` y
+`comunicacion-iot/docs/protocolo-lora.md`). Se conserva como referencia y no
+debe usarse para integraciones nuevas (InformeAuditoria, BOV-LOW-002).
+"""
 
 from __future__ import annotations
 
