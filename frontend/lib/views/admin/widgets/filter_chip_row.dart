@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 
-import 'admin_tokens.dart';
+import '../../../core/theme/app_colors.dart';
 
 enum AdminFilterType { all, active, inactive, admins }
 
+/// Filtros del listado de usuarios.
+///
+/// El estado seleccionado no depende solo del color: el chip activo también
+/// cambia de fondo y peso de texto, y expone `selected` a los lectores de
+/// pantalla.
 class FilterChipRow extends StatelessWidget {
   const FilterChipRow({
     super.key,
@@ -34,29 +39,34 @@ class FilterChipRow extends StatelessWidget {
 
   Widget _chip(String label, AdminFilterType value) {
     final isActive = selected == value;
-    return Material(
-      color: Colors.transparent,
+
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: 'Filtrar por $label',
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => onSelected(value),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: isActive ? AdminPalette.primary : AdminPalette.card,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: isActive ? AdminPalette.primary : AdminPalette.border,
-              width: 0.5,
+        child: Padding(
+          // Relleno vertical para alcanzar el minimo tactil de 48 dp.
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: BoxDecoration(
+              color: isActive ? AppColors.primary : AppColors.surface,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: isActive ? AppColors.primary : AppColors.borderStrong,
+              ),
             ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: isActive
-                  ? AdminPalette.onPrimary
-                  : AdminPalette.textPrimary,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.2,
+                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                color: isActive ? AppColors.onPrimary : AppColors.textPrimary,
+              ),
             ),
           ),
         ),

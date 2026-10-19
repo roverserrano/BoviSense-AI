@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
+import '../../data/models/conteo_model.dart';
+import '../../data/models/alerta_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
+import '../common/bovisense_ui.dart';
 import '../common/session_actions.dart';
 import 'conteo_detalle_page.dart';
 import 'ganadero_nav.dart';
-import 'widgets/ganadero_design_system.dart';
+import 'widgets/ganadero_widgets.dart';
 
 class HistorialConteosPage extends StatefulWidget {
   const HistorialConteosPage({super.key});
@@ -40,6 +44,18 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
     );
   }
 
+  void _openDetail(ConteoModel conteo) {
+    final ganaderoVm = context.read<GanaderoViewModel>();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider<GanaderoViewModel>.value(
+          value: ganaderoVm,
+          child: ConteoDetallePage(conteoId: conteo.id),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<GanaderoViewModel>();
@@ -60,7 +76,7 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
         alertas.where((alerta) => !alerta.leida).length;
 
     return Scaffold(
-      appBar: GanaderoAppBar(
+      appBar: AppTopBar(
         titleText: 'Historial',
         actions: const [SessionActionsMenu()],
       ),
@@ -82,32 +98,28 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
           children: [
             const SectionTitle(text: 'Alertas'),
             if (vm.isLoadingAlertas && alertas.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Semantics(
+                    label: 'Cargando alertas',
+                    child: const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                  ),
+                ),
               )
             else if (alertas.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: GanaderoColors.card,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: GanaderoColors.borderSoft,
-                    width: 0.5,
-                  ),
-                ),
-                child: const Text(
-                  'No tienes alertas. Tus conteos coinciden con lo esperado.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: GanaderoColors.textSecondary,
-                  ),
-                ),
+              const EmptyState(
+                icon: Icons.notifications_none_rounded,
+                title: 'Sin alertas',
+                description: 'Tus conteos coinciden con lo esperado.',
               )
             else
               ...alertas.map(
-                (alerta) => Padding(
+                (AlertaModel alerta) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: AlertItem(
                     alerta: alerta,
@@ -120,7 +132,7 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                 onPressed: vm.isLoadingAlertas
                     ? null
                     : () => vm.loadAlertas(more: true),
-                icon: const Icon(Icons.expand_more),
+                icon: const Icon(Icons.expand_more_rounded),
                 label: Text(
                   vm.isLoadingAlertas ? 'Cargando...' : 'Cargar más alertas',
                 ),
@@ -128,28 +140,24 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
             const SizedBox(height: 16),
             const SectionTitle(text: 'Conteos'),
             if (vm.isLoadingHistorial && sorted.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 30),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 30),
+                child: Center(
+                  child: Semantics(
+                    label: 'Cargando historial',
+                    child: const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                  ),
+                ),
               )
             else if (sorted.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: GanaderoColors.card,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: GanaderoColors.borderSoft,
-                    width: 0.5,
-                  ),
-                ),
-                child: const Text(
-                  'Todavía no hay conteos registrados.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: GanaderoColors.textSecondary,
-                  ),
-                ),
+              const EmptyState(
+                icon: Icons.history_rounded,
+                title: 'Todavía no hay conteos registrados',
+                description: 'Realiza tu primer conteo para verlo aquí.',
               )
             else
               ...sorted.map(
@@ -157,18 +165,7 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                   padding: const EdgeInsets.only(bottom: 10),
                   child: HistoryItem(
                     conteo: conteo,
-                    onTap: () {
-                      final ganaderoVm = context.read<GanaderoViewModel>();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              ChangeNotifierProvider<GanaderoViewModel>.value(
-                                value: ganaderoVm,
-                                child: ConteoDetallePage(conteoId: conteo.id),
-                              ),
-                        ),
-                      );
-                    },
+                    onTap: () => _openDetail(conteo),
                   ),
                 ),
               ),
@@ -177,22 +174,13 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                 onPressed: vm.isLoadingHistorial
                     ? null
                     : () => vm.loadHistorial(more: true),
-                icon: const Icon(Icons.expand_more),
+                icon: const Icon(Icons.expand_more_rounded),
                 label: Text(
                   vm.isLoadingHistorial ? 'Cargando...' : 'Cargar mas conteos',
                 ),
               ),
             const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: GanaderoColors.card,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: GanaderoColors.borderSoft,
-                  width: 0.5,
-                ),
-              ),
+            BoviCard(
               child: Row(
                 children: [
                   Expanded(
@@ -200,16 +188,16 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
                       'Total de conteos: ${vm.dashboard?.cantidadConteos ?? sorted.length}',
                       style: const TextStyle(
                         fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: GanaderoColors.textDark,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
                       ),
                     ),
                   ),
                   Text(
                     'Alertas: $alertasPendientes',
                     style: const TextStyle(
-                      fontSize: 12,
-                      color: GanaderoColors.muted,
+                      fontSize: 12.5,
+                      color: AppColors.muted,
                     ),
                   ),
                 ],
@@ -217,10 +205,9 @@ class _HistorialConteosPageState extends State<HistorialConteosPage> {
             ),
             if (vm.errorMessage != null) ...[
               const SizedBox(height: 10),
-              AlertCard(
-                title: 'Error',
-                description: vm.errorMessage!,
-                status: SimpleStatusType.error,
+              StatusBanner(
+                title: vm.errorMessage!,
+                tone: StatusBannerTone.error,
               ),
             ],
           ],

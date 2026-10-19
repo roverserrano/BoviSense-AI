@@ -4,11 +4,12 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../viewmodels/auth_view_model.dart';
 import '../common/bovisense_logo.dart';
+import '../common/bovisense_ui.dart';
 import 'recuperar_contrasena_page.dart';
-import '../ganadero/widgets/ganadero_design_system.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -92,27 +93,15 @@ class _LoginPageState extends State<LoginPage> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 24,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
           title: const Text('Contactate con soporte'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'Toca una opción para contactar con soporte.',
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.35,
-                  color: GanaderoColors.textSecondary,
-                ),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-
               const SizedBox(height: 12),
               _SupportInfoBlock(
                 label: 'Teléfono',
@@ -156,71 +145,53 @@ class _LoginPageState extends State<LoginPage> {
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
-        backgroundColor: AppTheme.bg,
-        body: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFFF8F6F1), Color(0xFFF2EFE7), Color(0xFFF8F6F1)],
-            ),
-          ),
-          child: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Stack(
-                  children: [
-                    SingleChildScrollView(
-                      padding: EdgeInsets.only(
-                        left: 18,
-                        right: 18,
-                        top: 10,
-                        bottom: 18 + bottomInset,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: EdgeInsets.only(
+                  left: 18,
+                  right: 18,
+                  top: 20,
+                  bottom: 18 + bottomInset,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight - 38,
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const _HeroBrand(),
+                      const SizedBox(height: 22),
+                      _LoginCard(
+                        formKey: _formKey,
+                        correoController: _correoController,
+                        passwordController: _passwordController,
+                        passwordFocusNode: _passwordFocusNode,
+                        obscureText: _obscureText,
+                        isLoading: vm.isLoading,
+                        errorMessage: vm.errorMessage,
+                        onFieldEdited: vm.clearError,
+                        onToggleObscureText: () {
+                          setState(() {
+                            _obscureText = !_obscureText;
+                          });
+                        },
+                        onPasswordRecovery: _openPasswordRecovery,
+                        onLogin: _login,
                       ),
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          minHeight: constraints.maxHeight - 28,
-                        ),
-                        child: Column(
-                          children: [
-                            const SizedBox(height: 10),
-                            _HeroBrand(),
-                            const SizedBox(height: 20),
-                            _LoginCard(
-                              formKey: _formKey,
-                              correoController: _correoController,
-                              passwordController: _passwordController,
-                              passwordFocusNode: _passwordFocusNode,
-                              obscureText: _obscureText,
-                              isLoading: vm.isLoading,
-                              errorMessage: vm.errorMessage,
-                              onFieldEdited: vm.clearError,
-                              onToggleObscureText: () {
-                                setState(() {
-                                  _obscureText = !_obscureText;
-                                });
-                              },
-                              onPasswordRecovery: _openPasswordRecovery,
-                              onLogin: _login,
-                            ),
-                            const SizedBox(height: 12),
-                            TextButton.icon(
-                              onPressed: _showSupportContact,
-                              icon: const Icon(
-                                Icons.support_agent_rounded,
-                                size: 18,
-                              ),
-                              label: const Text('Necesito ayuda de soporte'),
-                            ),
-                            const SizedBox(height: 6),
-                          ],
-                        ),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: _showSupportContact,
+                        icon: const Icon(Icons.support_agent_rounded, size: 18),
+                        label: const Text('Necesito ayuda de soporte'),
                       ),
-                    ),
-                  ],
-                );
-              },
-            ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -229,61 +200,46 @@ class _LoginPageState extends State<LoginPage> {
 }
 
 class _HeroBrand extends StatelessWidget {
+  const _HeroBrand();
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         Container(
-          width: 148,
-          height: 148,
-          padding: const EdgeInsets.all(7),
+          width: 132,
+          height: 132,
+          padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
-            color: const Color(0xFFF8F6F1),
+            color: AppColors.surface,
             shape: BoxShape.circle,
-            boxShadow: [
+            border: Border.all(color: AppColors.border, width: 1),
+            boxShadow: const [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.10),
+                color: AppColors.shadow,
                 blurRadius: 20,
-                offset: const Offset(0, 8),
+                offset: Offset(0, 8),
               ),
             ],
-            border: Border.all(color: GanaderoColors.borderSoft, width: 1),
           ),
           child: const ClipOval(
             child: ColoredBox(
               color: Colors.white,
-              child: BoviSenseLogo(
-                size: 134,
-                fit: BoxFit.cover,
-                alignment: Alignment(0, -0.82),
-              ),
+              child: BoviSenseLogo(size: 120),
             ),
           ),
         ),
-        const SizedBox(height: 18),
-        const Text(
-          'BoviSense',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 30,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.3,
-            color: GanaderoColors.textDark,
-            height: 1.05,
-          ),
-        ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 16),
+        Text('BoviSense', style: Theme.of(context).textTheme.headlineLarge),
+        const SizedBox(height: 6),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 300),
-          child: const Text(
+          child: Text(
             'La inteligencia artificial al servicio del campo',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 15,
-              height: 1.4,
-              color: GanaderoColors.textSecondary,
-              letterSpacing: 0.15,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
           ),
         ),
       ],
@@ -323,19 +279,19 @@ class _LoginCard extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFEFB),
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: const Color(0xFFDDE7D6), width: 1),
-        boxShadow: [
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.dialog),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.14),
-            blurRadius: 32,
-            offset: const Offset(0, 16),
+            color: AppColors.shadow,
+            blurRadius: 28,
+            offset: Offset(0, 12),
           ),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
+        padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
         child: AutofillGroup(
           child: Form(
             key: formKey,
@@ -343,24 +299,17 @@ class _LoginCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
+                Text(
                   'Bienvenido',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.w700,
-                    color: GanaderoColors.textDark,
-                    height: 1.05,
-                  ),
+                  style: Theme.of(context).textTheme.headlineMedium,
                 ),
-                const SizedBox(height: 8),
-                const Text(
+                const SizedBox(height: 6),
+                Text(
                   'Ingresa tus credenciales para continuar',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 15,
-                    height: 1.45,
-                    color: GanaderoColors.textSecondary,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textSecondary,
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -406,12 +355,14 @@ class _LoginCard extends StatelessWidget {
                   onChanged: (_) => onFieldEdited(),
                   suffixIcon: IconButton(
                     onPressed: onToggleObscureText,
+                    tooltip: obscureText
+                        ? 'Mostrar contraseña'
+                        : 'Ocultar contraseña',
                     icon: Icon(
                       obscureText
                           ? Icons.visibility_outlined
                           : Icons.visibility_off_outlined,
                     ),
-                    color: GanaderoColors.muted,
                   ),
                   onFieldSubmitted: (_) {
                     if (!isLoading) {
@@ -427,9 +378,12 @@ class _LoginCard extends StatelessWidget {
                 ),
                 if (errorMessage != null && !isLoading) ...[
                   const SizedBox(height: 14),
-                  _LoginErrorBox(message: errorMessage!),
+                  StatusBanner(
+                    title: errorMessage!,
+                    tone: StatusBannerTone.error,
+                  ),
                 ],
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
@@ -438,24 +392,16 @@ class _LoginCard extends StatelessWidget {
                         : () {
                             onPasswordRecovery();
                           },
-                    style: TextButton.styleFrom(
-                      foregroundColor: GanaderoColors.primary,
-                      padding: EdgeInsets.zero,
-                      minimumSize: const Size(0, 36),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
                     child: const Text('¿Olvidaste tu contraseña?'),
                   ),
                 ),
-                const SizedBox(height: 10),
-                _LoginActionButton(
-                  label: 'Iniciar sesión',
+                const SizedBox(height: 8),
+                PrimaryButton(
+                  label: isLoading ? 'Ingresando...' : 'Iniciar sesión',
                   isLoading: isLoading,
-                  onPressed: isLoading
-                      ? null
-                      : () {
-                          onLogin();
-                        },
+                  onPressed: () {
+                    onLogin();
+                  },
                 ),
               ],
             ),
@@ -516,161 +462,11 @@ class _LoginTextField extends StatelessWidget {
       validator: validator,
       onChanged: onChanged,
       onFieldSubmitted: onFieldSubmitted,
-      style: const TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w500,
-        color: GanaderoColors.textDark,
-      ),
+      style: Theme.of(context).textTheme.bodyLarge,
       decoration: InputDecoration(
         hintText: hintText,
-        hintStyle: const TextStyle(
-          color: Color(0xFF8D9B88),
-          fontWeight: FontWeight.w400,
-        ),
-        filled: true,
-        fillColor: const Color(0xFFF3F6F1),
-        prefixIcon: Container(
-          margin: const EdgeInsets.all(10),
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-            color: const Color(0xFFE4F0DE),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Icon(prefixIcon, color: GanaderoColors.primary, size: 20),
-        ),
-        prefixIconConstraints: const BoxConstraints(minWidth: 62),
+        prefixIcon: Icon(prefixIcon),
         suffixIcon: suffixIcon,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 18,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: const BorderSide(color: Color(0xFFD6E1D0), width: 1),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: const BorderSide(color: Color(0xFFD6E1D0), width: 1),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: const BorderSide(
-            color: GanaderoColors.primary,
-            width: 1.4,
-          ),
-        ),
-        errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: const BorderSide(color: Color(0xFFC6655D), width: 1.2),
-        ),
-        focusedErrorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: const BorderSide(color: Color(0xFFC6655D), width: 1.4),
-        ),
-      ),
-    );
-  }
-}
-
-class _LoginActionButton extends StatelessWidget {
-  const _LoginActionButton({
-    required this.label,
-    required this.isLoading,
-    required this.onPressed,
-  });
-
-  final String label;
-  final bool isLoading;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: GanaderoColors.primary.withValues(
-              alpha: isLoading ? 0.18 : 0.28,
-            ),
-            blurRadius: isLoading ? 12 : 18,
-            offset: Offset(0, isLoading ? 5 : 8),
-          ),
-        ],
-      ),
-      child: ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          elevation: 0,
-          backgroundColor: GanaderoColors.primary,
-          disabledBackgroundColor: GanaderoColors.primary,
-          foregroundColor: GanaderoColors.buttonText,
-          disabledForegroundColor: GanaderoColors.buttonText,
-          minimumSize: const Size(double.infinity, 56),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
-        ),
-        onPressed: isLoading ? null : onPressed,
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, animation) {
-            return FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
-                child: child,
-              ),
-            );
-          },
-          child: isLoading
-              ? const Row(
-                  key: ValueKey('loading'),
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: GanaderoColors.buttonText,
-                        backgroundColor: Color(0x334A6741),
-                      ),
-                    ),
-                    SizedBox(width: 12),
-                    Text(
-                      'Ingresando...',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.2,
-                        color: GanaderoColors.buttonText,
-                      ),
-                    ),
-                  ],
-                )
-              : Row(
-                  key: const ValueKey('label'),
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Icon(Icons.arrow_forward_rounded, size: 20),
-                  ],
-                ),
-        ),
       ),
     );
   }
@@ -693,110 +489,45 @@ class _SupportInfoBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final content = Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE4F0DE),
-              borderRadius: BorderRadius.circular(12),
+    return BoviCard(
+      padding: EdgeInsets.zero,
+      color: AppColors.surfaceAlt,
+      onTap: tappable ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: AppColors.primary, size: 20),
             ),
-            child: Icon(icon, color: GanaderoColors.primary, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: GanaderoColors.textSecondary,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: Theme.of(context).textTheme.labelSmall),
+                  const SizedBox(height: 3),
+                  Text(
+                    value,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: GanaderoColors.textDark,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (tappable)
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: GanaderoColors.muted,
-            ),
-        ],
-      ),
-    );
-
-    return Material(
-      color: GanaderoColors.surfaceAlt,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: tappable ? onTap : null,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: GanaderoColors.borderSoft, width: 0.8),
-          ),
-          child: content,
-        ),
-      ),
-    );
-  }
-}
-
-/// Error de inicio de sesion dentro de la tarjeta.
-///
-/// Antes solo se avisaba con un SnackBar, que desaparece y puede quedar tapado
-/// por el teclado; aqui el mensaje queda visible hasta que el usuario corrige.
-class _LoginErrorBox extends StatelessWidget {
-  const _LoginErrorBox({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFCEBEB),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE3B4AE), width: 1),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(
-            Icons.error_outline_rounded,
-            size: 18,
-            color: Color(0xFF9C3B31),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(
-                fontSize: 13,
-                height: 1.35,
-                color: Color(0xFF7A2820),
+                ],
               ),
             ),
-          ),
-        ],
+            if (tappable)
+              const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+          ],
+        ),
       ),
     );
   }

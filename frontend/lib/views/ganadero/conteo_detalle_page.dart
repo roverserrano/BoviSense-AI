@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/conteo_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
+import '../common/bovisense_ui.dart';
 import '../common/session_actions.dart';
-import 'widgets/ganadero_design_system.dart';
+import 'widgets/ganadero_widgets.dart';
 
 class ConteoDetallePage extends StatefulWidget {
   const ConteoDetallePage({super.key, required this.conteoId});
@@ -36,7 +38,7 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: GanaderoAppBar(
+      appBar: AppTopBar(
         titleText: 'Resultado de conteo',
         actions: const [SessionActionsMenu()],
       ),
@@ -44,8 +46,15 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
         future: _future,
         builder: (_, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(
-              child: CircularProgressIndicator(strokeWidth: 2),
+            return Center(
+              child: Semantics(
+                label: 'Cargando conteo',
+                child: const SizedBox(
+                  width: 26,
+                  height: 26,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                ),
+              ),
             );
           }
 
@@ -53,15 +62,15 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
             return ListView(
               padding: const EdgeInsets.all(20),
               children: [
-                AlertCard(
+                StatusBanner(
                   title: 'No se pudo cargar el conteo',
                   description: snapshot.error.toString().replaceFirst(
                     'Exception: ',
                     '',
                   ),
-                  status: SimpleStatusType.error,
+                  tone: StatusBannerTone.error,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 PrimaryButton(label: 'Reintentar', onPressed: _load),
                 const SizedBox(height: 10),
                 OutlineActionButton(
@@ -89,17 +98,7 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
                     : 'Excedente',
               ),
               const SizedBox(height: 14),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: GanaderoColors.card,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: GanaderoColors.borderSoft,
-                    width: 0.5,
-                  ),
-                ),
+              BoviCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -118,7 +117,8 @@ class _ConteoDetallePageState extends State<ConteoDetallePage> {
                         conteo.resumen,
                         style: const TextStyle(
                           fontSize: 13,
-                          color: GanaderoColors.textSecondary,
+                          height: 1.4,
+                          color: AppColors.textSecondary,
                         ),
                       ),
                     ],
@@ -151,15 +151,15 @@ class _DetailRow extends StatelessWidget {
         Expanded(
           child: Text(
             label,
-            style: const TextStyle(fontSize: 13, color: GanaderoColors.muted),
+            style: const TextStyle(fontSize: 13, color: AppColors.muted),
           ),
         ),
         Text(
           value,
           style: const TextStyle(
             fontSize: 13,
-            fontWeight: FontWeight.w500,
-            color: GanaderoColors.textDark,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
           ),
         ),
       ],

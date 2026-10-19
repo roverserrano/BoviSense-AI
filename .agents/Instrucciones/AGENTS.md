@@ -1169,3 +1169,67 @@ SX1278.
 3. Decidir los pendientes de producto (coleccion heredada, TTL, brownout,
    autoedicion admin) antes de planear hardware.
 
+## 26. Refactorizacion UI/UX por etapas (2026-10-18)
+
+### Objetivo
+
+Aplicar la guia `.agents/Instrucciones/refactorizacion-ui-ux.md` por etapas
+(diagnostico, sistema de diseno, autenticacion, administrador, ganadero, conteo
+y QA) sin tocar firmware, LoRa, Jetson, backend, reglas de Firebase, contratos
+de API ni la logica de conteo y BLE: solo presentacion.
+
+### Cambios realizados
+
+- **Etapa 2 (sistema de diseno):** `DESIGN.md` en la raiz; tokens unicos en
+  `frontend/lib/core/theme/` (`app_colors.dart`, `app_typography.dart`,
+  `app_theme.dart` con `ThemeData` M3: botones, campos, tarjetas, dialogos,
+  chips, avisos, snackbars y navegacion); componentes compartidos en
+  `frontend/lib/views/common/bovisense_ui.dart` (`AppTopBar`, `BoviCard`,
+  `SectionTitle`, `StatusChip`, `StatusBanner`, `StatusBar`, `StatCard`,
+  `EmptyState`, `PrimaryButton`, `OutlineActionButton`, `StopButton`,
+  `TechnicalDetails`) y del ganadero en
+  `frontend/lib/views/ganadero/widgets/ganadero_widgets.dart`
+  (`NextStepCard`, `HistoryItem`, `StepFlowItem`, `ResultHero`,
+  `GanaderoBottomNavBar`, `AlertItem`).
+- **Etapa 3 (autenticacion):** login, recuperar y cambiar contrasena, splash y
+  acciones de sesion migrados; se conservaron textos y flujos exactos.
+- **Etapa 4 (administracion):** panel, formulario de usuario, tarjeta de
+  usuario, busqueda, filtros y dialogo de borrado migrados; se eliminaron
+  `admin_tokens.dart`, `section_label.dart`, `admin_empty_state.dart` y
+  `admin_fab.dart` (sustituidos por el kit compartido y el FAB estandar).
+- **Etapa 5 (ganadero):** dashboard, finca, historial y detalle de conteo
+  migrados; `ganadero_nav.dart` no requeria cambios (solo logica).
+- **Etapa 6 (conteo):** `estado_dispositivo_page.dart` migrado de forma
+  quirurgica: misma logica BLE/CommandQueue, mismos comandos y textos; solo
+  cambio de componentes y tokens.
+- **Etapa 7 (QA):** se elimino el shim `ganadero_design_system.dart` y los
+  alias `GanaderoColors`/`GanaderoAppBar`; se agrego
+  `frontend/test/design_system_test.dart` (contraste WCAG de los tokens, tema
+  global y componentes compartidos) y se actualizaron los conteos en
+  `docs/codebase/TESTING.md`, `CONTRIBUTING.md` y `frontend/README.md`.
+
+### Pruebas ejecutadas
+
+- `flutter analyze`: sin hallazgos.
+- `flutter test`: **43/43** (34 previos + 9 del sistema de diseno).
+- Backend y Jetson: sin cambios en esta sesion.
+
+### Decisiones de presentacion
+
+- Paleta agrotech centralizada (`#185441`, `#10382E`, `#E5F0E9`, `#D4A447`,
+  `#F7F9F6`) con contraste verificado numericamente; el dorado es de relleno
+  (no texto sobre claro) y el verde atenuado se oscurecio a `#5A6E61`.
+- Los bordes de controles usan `borderStrong` (#788D81, 3.5:1) para cumplir
+  WCAG 1.4.11; los estados nunca dependen solo del color.
+- Sin cambios de datos ni de API: la app conserva Provider/IndexedStack,
+  `CommandQueue`, sesiones BLE y todos los textos que las pruebas fijan.
+
+### Siguiente paso recomendado
+
+1. Prueba visual en un telefono real (login, panel, finca, conteo de punta a
+   punta) antes de commitear, ya que la refactorizacion es solo local.
+2. Si se aprueba, commitear por etapas `frontend/` + `DESIGN.md` + docs.
+3. Retomar los pendientes de la auditoria que siguen abiertos
+   (parte movil de BOV-HIGH-003, MED-002/MED-004..MED-010).
+
+

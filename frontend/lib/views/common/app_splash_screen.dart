@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../viewmodels/auth_view_model.dart';
 import 'bovisense_logo.dart';
 
@@ -85,39 +86,32 @@ class AppSplashView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F1EB),
       body: SafeArea(
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: const [
-              BoviSenseLogo(size: 160),
-              SizedBox(height: 18),
-              Text(
-                'BoviSense',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF2D4228),
-                ),
-              ),
-              SizedBox(height: 8),
+            children: [
+              const BoviSenseLogo(size: 160),
+              const SizedBox(height: 18),
+              Text('BoviSense', style: textTheme.headlineLarge),
+              const SizedBox(height: 8),
               Text(
                 'Inteligencia aplicada al campo',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF5A7254),
+                style: textTheme.bodyMedium?.copyWith(
+                  color: AppColors.textSecondary,
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              SizedBox(height: 24),
-              SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.4,
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4A6741)),
+              const SizedBox(height: 24),
+              Semantics(
+                label: 'Cargando BoviSense',
+                child: const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
                 ),
               ),
             ],

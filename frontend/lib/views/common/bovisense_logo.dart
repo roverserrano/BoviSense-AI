@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_colors.dart';
+
 class BoviSenseBrand {
   static const String logoAssetPath = 'assets/images/logoApp.png';
 }
@@ -47,7 +49,7 @@ class BoviSenseLogo extends StatelessWidget {
             style: const TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF2D4228),
+              color: AppColors.textPrimary,
             ),
           ),
           if (subtitle != null) ...[
@@ -58,7 +60,7 @@ class BoviSenseLogo extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 14,
                 height: 1.35,
-                color: Color(0xFF5A7254),
+                color: AppColors.textSecondary,
                 fontWeight: FontWeight.w400,
               ),
             ),
@@ -85,7 +87,7 @@ class BoviSenseLogoCompact extends StatelessWidget {
           color: Colors.white.withValues(alpha: 0.35),
           width: 0.7,
         ),
-        color: const Color(0x334A6741),
+        color: AppColors.primary.withValues(alpha: 0.35),
       ),
       padding: const EdgeInsets.all(2),
       child: ClipRRect(
@@ -123,11 +125,11 @@ class _LogoImage extends StatelessWidget {
       filterQuality: FilterQuality.high,
       errorBuilder: (_, __, ___) {
         return Container(
-          color: const Color(0xFFE8F0E4),
+          color: AppColors.primaryLight,
           alignment: Alignment.center,
           child: Icon(
             Icons.image_not_supported_outlined,
-            color: const Color(0xFF4A6741),
+            color: AppColors.primary,
             size: size * 0.35,
           ),
         );

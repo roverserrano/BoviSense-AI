@@ -42,7 +42,7 @@ claro está bloqueado; `debug` y `profile` lo permiten para el backend local.
 | `lib/data/models/` | Modelos y utilidades de parseo. |
 | `lib/core/` | Configuración, tema y utilidades (`command_queue`, `request_id`). |
 | `android/` | Proyecto Android; `MainActivity.kt` añade el canal nativo de Bluetooth. |
-| `test/` | Pruebas de widgets y reglas puras (34 casos). |
+| `test/` | Pruebas de widgets y reglas puras (44 casos). |
 
 El detalle del flujo BLE, timeouts y códigos de error está en
 [`docs/arquitectura/integraciones-iot.md`](../docs/arquitectura/integraciones-iot.md).

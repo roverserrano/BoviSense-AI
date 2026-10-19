@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_typography.dart';
 import '../../data/models/usuario_model.dart';
 import '../../viewmodels/admin_usuarios_view_model.dart';
 import '../../viewmodels/auth_view_model.dart';
-import 'widgets/admin_tokens.dart';
-import 'widgets/section_label.dart';
+import '../common/bovisense_ui.dart';
 
 class UsuarioFormPage extends StatefulWidget {
   const UsuarioFormPage({super.key, this.usuario});
@@ -108,12 +109,8 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
     final vm = context.watch<AdminUsuariosViewModel>();
 
     return Scaffold(
-      backgroundColor: AdminPalette.pageBg,
-      appBar: AppBar(
-        backgroundColor: AdminPalette.appBar,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        title: Text(_isEditing ? 'Editar usuario' : 'Registrar usuario'),
+      appBar: AppTopBar(
+        titleText: _isEditing ? 'Editar usuario' : 'Registrar usuario',
       ),
       body: Form(
         key: _formKey,
@@ -122,16 +119,20 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
           children: [
             if (_isEditing && widget.usuario != null) ...[
               _identityCard(widget.usuario!),
-              const SizedBox(height: 14),
+              const SizedBox(height: 16),
             ],
-            const SectionLabel(text: 'Datos personales'),
-            _sectionCard(
-              children: [
-                _fieldRow(
-                  label: 'Nombre',
-                  child: TextFormField(
+            const SectionTitle(text: 'Datos personales'),
+            BoviCard(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  TextFormField(
                     controller: _nombreController,
-                    decoration: _fieldDecoration(),
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'Nombre',
+                      prefixIcon: Icon(Icons.badge_outlined),
+                    ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return 'Ingresa el nombre';
@@ -139,14 +140,13 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       return null;
                     },
                   ),
-                ),
-                _thinDivider(),
-                _fieldRow(
-                  label: 'Apellidos',
-                  child: TextFormField(
+                  const SizedBox(height: 14),
+                  TextFormField(
                     controller: _apellidosController,
-                    decoration: _fieldDecoration(
-                      hintText: 'Apellido paterno y materno',
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'Apellidos',
+                      helperText: 'Apellido paterno y materno',
                     ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
@@ -155,18 +155,18 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       return null;
                     },
                   ),
-                ),
-                _thinDivider(),
-                _fieldRow(
-                  label: 'Cédula de identidad',
-                  child: TextFormField(
+                  const SizedBox(height: 14),
+                  TextFormField(
                     controller: _cedulaController,
                     keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.next,
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(8),
                     ],
-                    decoration: _fieldDecoration(),
+                    decoration: const InputDecoration(
+                      labelText: 'Cédula de identidad',
+                    ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return 'Ingresa la cédula';
@@ -181,19 +181,25 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       return null;
                     },
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-            const SizedBox(height: 14),
-            const SectionLabel(text: 'Contacto'),
-            _sectionCard(
-              children: [
-                _fieldRow(
-                  label: 'Correo electrónico',
-                  child: TextFormField(
+            const SizedBox(height: 16),
+            const SectionTitle(text: 'Contacto'),
+            BoviCard(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  TextFormField(
                     controller: _correoController,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: _fieldDecoration(),
+                    textInputAction: TextInputAction.next,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: const InputDecoration(
+                      labelText: 'Correo electrónico',
+                      prefixIcon: Icon(Icons.alternate_email_rounded),
+                    ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return 'Ingresa el correo';
@@ -205,18 +211,19 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       return null;
                     },
                   ),
-                ),
-                _thinDivider(),
-                _fieldRow(
-                  label: 'Teléfono',
-                  child: TextFormField(
+                  const SizedBox(height: 14),
+                  TextFormField(
                     controller: _telefonoController,
                     keyboardType: TextInputType.phone,
+                    textInputAction: TextInputAction.done,
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(8),
                     ],
-                    decoration: _fieldDecoration(),
+                    decoration: const InputDecoration(
+                      labelText: 'Teléfono',
+                      prefixIcon: Icon(Icons.phone_outlined),
+                    ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return 'Ingresa el teléfono';
@@ -230,108 +237,97 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                       return null;
                     },
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-            const SizedBox(height: 14),
-            const SectionLabel(text: 'Acceso al sistema'),
-            _sectionCard(
-              children: [
-                _dropdownRow(
-                  label: 'Rol',
-                  value: _rol,
-                  items: const [
-                    DropdownMenuItem(value: 'usuario', child: Text('Usuario')),
-                    DropdownMenuItem(
-                      value: 'administrador',
-                      child: Text('Administrador'),
+            const SizedBox(height: 16),
+            const SectionTitle(text: 'Acceso al sistema'),
+            BoviCard(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: _rol,
+                    decoration: const InputDecoration(
+                      labelText: 'Rol',
+                      prefixIcon: Icon(Icons.admin_panel_settings_outlined),
                     ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _rol = value);
-                  },
-                  enabled: !_isOwnAccount,
-                ),
-                _thinDivider(),
-                if (_isEditing)
-                  _dropdownRow(
-                    label: 'Estado',
-                    value: _estado,
                     items: const [
-                      DropdownMenuItem(value: 'activo', child: Text('Activo')),
                       DropdownMenuItem(
-                        value: 'inactivo',
-                        child: Text('Inactivo'),
+                        value: 'usuario',
+                        child: Text('Usuario'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'administrador',
+                        child: Text('Administrador'),
                       ),
                     ],
-                    onChanged: (value) {
-                      if (value != null) setState(() => _estado = value);
-                    },
-                    enabled: !_isOwnAccount,
-                  )
-                else
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Estado',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: AdminPalette.textPrimary,
-                            ),
-                          ),
+                    onChanged: _isOwnAccount
+                        ? null
+                        : (value) {
+                            if (value != null) setState(() => _rol = value);
+                          },
+                  ),
+                  const SizedBox(height: 14),
+                  if (_isEditing)
+                    DropdownButtonFormField<String>(
+                      initialValue: _estado,
+                      decoration: const InputDecoration(
+                        labelText: 'Estado',
+                        prefixIcon: Icon(Icons.toggle_on_outlined),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'activo',
+                          child: Text('Activo'),
                         ),
-                        Text(
-                          'Activo',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: AdminPalette.activeText,
-                          ),
+                        DropdownMenuItem(
+                          value: 'inactivo',
+                          child: Text('Inactivo'),
                         ),
                       ],
+                      onChanged: _isOwnAccount
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setState(() => _estado = value);
+                              }
+                            },
+                    )
+                  else
+                    InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Estado',
+                        prefixIcon: Icon(Icons.toggle_on_outlined),
+                      ),
+                      child: const Text(
+                        'Activo',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.success,
+                        ),
+                      ),
                     ),
-                  ),
-                if (_isOwnAccount) ...[
-                  _thinDivider(),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                    child: Text(
-                      'No puedes cambiar tu propio rol ni desactivar tu cuenta.',
-                      style: TextStyle(fontSize: 11, color: AdminPalette.muted),
+                  if (_isOwnAccount) ...[
+                    const SizedBox(height: 14),
+                    const StatusBanner(
+                      title: 'Tu propia cuenta',
+                      description:
+                          'No puedes cambiar tu propio rol ni desactivar tu cuenta.',
+                      tone: StatusBannerTone.neutral,
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
             const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: vm.isSaving ? null : _save,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 52),
-                elevation: 0,
-                backgroundColor: AdminPalette.primary,
-                foregroundColor: AdminPalette.onPrimary,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: vm.isSaving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : Text(
-                      _isEditing ? 'Actualizar usuario' : 'Registrar usuario',
-                    ),
+            PrimaryButton(
+              label: _isEditing ? 'Actualizar usuario' : 'Registrar usuario',
+              isLoading: vm.isSaving,
+              onPressed: _save,
             ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -342,22 +338,16 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
     final isActive = usuario.estado.toLowerCase() == 'activo';
     final initials = _initials(usuario.nombre, usuario.apellidos);
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AdminPalette.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AdminPalette.border, width: 0.5),
-      ),
+    return BoviCard(
       child: Row(
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundColor: AdminPalette.primary,
+            backgroundColor: AppColors.primary,
             child: Text(
               initials,
               style: const TextStyle(
-                color: AdminPalette.onPrimary,
+                color: AppColors.onPrimary,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -370,145 +360,24 @@ class _UsuarioFormPageState extends State<UsuarioFormPage> {
                 Text(
                   usuario.nombreCompleto,
                   style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: AdminPalette.textPrimary,
+                    fontSize: 14.5,
+                    height: 1.25,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 3),
-                Text(
-                  usuario.correo,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AdminPalette.muted,
-                  ),
-                ),
+                Text(usuario.correo, style: AppTypography.caption),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(
-              color: isActive ? AdminPalette.activeBg : AdminPalette.inactiveBg,
-              borderRadius: BorderRadius.circular(100),
-            ),
-            child: Text(
-              usuario.estado,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: isActive
-                    ? AdminPalette.activeText
-                    : AdminPalette.inactiveText,
-              ),
-            ),
+          StatusChip(
+            label: usuario.estado,
+            color: isActive ? AppColors.success : AppColors.muted,
           ),
         ],
       ),
     );
-  }
-
-  Widget _sectionCard({required List<Widget> children}) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AdminPalette.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AdminPalette.border, width: 0.5),
-      ),
-      child: Column(children: children),
-    );
-  }
-
-  Widget _fieldRow({required String label, required Widget child}) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(fontSize: 11, color: AdminPalette.muted),
-          ),
-          const SizedBox(height: 6),
-          child,
-        ],
-      ),
-    );
-  }
-
-  Widget _dropdownRow({
-    required String label,
-    required String value,
-    required List<DropdownMenuItem<String>> items,
-    required ValueChanged<String?> onChanged,
-    bool enabled = true,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: AdminPalette.textPrimary,
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 170,
-            child: DropdownButtonHideUnderline(
-              child: DropdownButtonFormField<String>(
-                initialValue: value,
-                items: items,
-                onChanged: enabled ? onChanged : null,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  filled: false,
-                  border: UnderlineInputBorder(borderSide: BorderSide.none),
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: UnderlineInputBorder(
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding: EdgeInsets.zero,
-                ),
-                icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: AdminPalette.textPrimary,
-                ),
-                dropdownColor: AdminPalette.card,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  InputDecoration _fieldDecoration({String? hintText}) {
-    return InputDecoration(
-      hintText: hintText,
-      hintStyle: const TextStyle(fontSize: 12, color: AdminPalette.muted),
-      isDense: true,
-      filled: false,
-      border: const UnderlineInputBorder(borderSide: BorderSide.none),
-      enabledBorder: const UnderlineInputBorder(borderSide: BorderSide.none),
-      focusedBorder: const UnderlineInputBorder(borderSide: BorderSide.none),
-      errorBorder: const UnderlineInputBorder(borderSide: BorderSide.none),
-      focusedErrorBorder: const UnderlineInputBorder(
-        borderSide: BorderSide.none,
-      ),
-      contentPadding: EdgeInsets.zero,
-    );
-  }
-
-  Widget _thinDivider() {
-    return Container(height: 0.5, color: const Color(0xFFE8E2D4));
   }
 
   String _initials(String name, String lastName) {

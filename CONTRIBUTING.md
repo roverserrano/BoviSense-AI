@@ -34,7 +34,7 @@ Ejecuta lo que corresponda a tu cambio antes de darlo por terminado:
 
 ```bash
 cd backend && npm test                               # unitarias (4 casos)
-cd frontend && flutter analyze && flutter test       # app (34 casos)
+cd frontend && flutter analyze && flutter test       # app (44 casos)
 cd jetson && python3 -m unittest test_secure_protocol.py   # receptor (29 casos)
 cd jetson && python3 -m unittest test_tracking_logic.py    # tracking (9 casos)
 ```

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frontend/data/models/alerta_model.dart';
-import 'package:frontend/views/ganadero/widgets/ganadero_design_system.dart';
+import 'package:frontend/views/ganadero/widgets/ganadero_widgets.dart';
 
 AlertaModel alerta({required bool leida, String nivel = 'alta'}) {
   return AlertaModel(

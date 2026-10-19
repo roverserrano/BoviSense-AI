@@ -50,11 +50,21 @@ class SessionActionsMenu extends StatelessWidget {
       itemBuilder: (_) => const [
         PopupMenuItem(
           value: _SessionAction.changePassword,
-          child: Text('Cambiar contraseña'),
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.lock_outline_rounded),
+            title: Text('Cambiar contraseña'),
+          ),
         ),
         PopupMenuItem(
           value: _SessionAction.logout,
-          child: Text('Cerrar sesión'),
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.logout_rounded),
+            title: Text('Cerrar sesión'),
+          ),
         ),
       ],
     );

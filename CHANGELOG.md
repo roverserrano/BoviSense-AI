@@ -58,6 +58,33 @@ en la rama `dev`. Las fechas están en formato ISO.
   al encolar, la cola se invalida al desconectar/reconectar y el ticket se pide
   con `session_id` explícito cuando se conoce.
 
+### Refactorización visual UI/UX (2026-10-18, local sin commit)
+
+- Sistema de diseño único: `DESIGN.md` (identidad, reglas y contrastes
+  verificados), tokens en `frontend/lib/core/theme/` (`AppColors`,
+  `AppTypography`, `AppTheme` con Material 3 completo) y componentes en
+  `frontend/lib/views/common/bovisense_ui.dart` (compartidos) y
+  `frontend/lib/views/ganadero/widgets/ganadero_widgets.dart` (del ganadero).
+- Se eliminaron los tres sistemas de color paralelos (`AdminPalette`,
+  `GanaderoColors`, estilos a mano en pantallas) y los widgets duplicados
+  (`AdminEmptyState`, `SectionLabel`, `AdminFab`, `section_label.dart`,
+  `admin_tokens.dart`, `admin_fab.dart`, `admin_empty_state.dart`).
+- Pantallas migradas por completo (login, recuperación, cambio de contraseña,
+  splash, panel de administración, formulario de usuario, dashboard del
+  ganadero, finca, historial, detalle y flujo de conteo) manteniendo textos,
+  lógica, navegación y comportamiento BLE intactos.
+- Accesibilidad: contraste WCAG verificado con pruebas automáticas
+  (`frontend/test/design_system_test.dart`), bordes de controles ≥ 3:1,
+  objetivos táctiles ≥ 44-48 px, estados con texto además de color y etiquetas
+  `Semantics` en cargas y acciones.
+- Revisión en teléfono real: la barra inferior del ganadero se acotó (su
+  contenido se estiraba al alto completo del `Scaffold` y dejaba el cuerpo sin
+  espacio; prueba de regresión incluida) y el logo de la app se recortó a un
+  PNG transparente 1024×1024 sin el marco gris ni la marca de agua del lienzo
+  original.
+- La app quedó con **44/44** casos (`flutter analyze` sin hallazgos). Backend y
+  Jetson no se tocaron en esta tarea.
+
 ## [2026-10-12] — `b94fcda`
 
 "Aplica el plan consolidado: cierra comandos sin firma y refuerza pruebas, CI y
