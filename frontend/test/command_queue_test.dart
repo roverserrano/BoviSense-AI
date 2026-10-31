@@ -41,4 +41,38 @@ void main() {
     expect(await queue.add(() async => 7), 7);
     expect(queue.isBusy, false);
   });
+
+  test('invalidate drops tasks that have not started', () async {
+    final queue = CommandQueue();
+    final log = <String>[];
+    final gate = Completer<void>();
+
+    final first = queue.add(() async {
+      log.add('a');
+      await gate.future;
+      log.add('fin-a');
+    });
+    // Deja que la primera empiece y quede esperando la compuerta.
+    await Future<void>.delayed(Duration.zero);
+    final second = queue.add(() async {
+      log.add('b');
+      return 2;
+    });
+
+    // La conexion cambio: lo pendiente pertenece a una conexion anterior.
+    queue.invalidate();
+    gate.complete();
+
+    await first;
+    expect(await second, null);
+    expect(log, ['a', 'fin-a'], reason: 'la tarea en curso no se cancela');
+    expect(queue.isBusy, false);
+  });
+
+  test('tasks added after invalidate run normally', () async {
+    final queue = CommandQueue();
+    queue.invalidate();
+    expect(await queue.add(() async => 5), 5);
+    expect(queue.isBusy, false);
+  });
 }

@@ -3,7 +3,8 @@
 ## Nodos
 
 - App movil Flutter: BLE central. Nunca habla con la radio directamente.
-- ESP32: puente BLE <-> LoRa. Retransmite tramas opacas y no conoce la clave.
+- ESP32: puente BLE <-> LoRa. Comprueba estructura y correlacion, retransmite
+  la trama sin modificar sus bytes y no conoce la clave.
 - Backend Express: firma los comandos `C1` y verifica las respuestas `R1`.
 - Jetson Orin Nano: receptor Python con SX1278 por SPI; autentica, ejecuta y firma.
 - SX1278: radio LoRa 433 MHz en ambos extremos.
@@ -18,6 +19,12 @@
 6. La Jetson responde `R1` firmada por LoRa; el ESP32 la reenvia por BLE.
 7. La app envia la `R1` a `POST /api/ganadero/iot/respuestas` para verificarla.
 8. Solo despues de esa verificacion la app muestra el estado o el conteo.
+
+El firmware `bovisense-c1r1-2.0` limita los reintentos a la misma trama firmada
+y descarta comandos de conexiones BLE anteriores. Desconectar el telefono
+no equivale a detener la Jetson: al reconectar se consulta la sesion antes de
+repetir una accion. `B0` solo informa errores del puente y nunca sirve como
+prueba de resultado.
 
 El guardado de un conteo real exige la prueba final firmada: la cantidad nunca
 la inventa el cliente.
@@ -34,4 +41,5 @@ la inventa el cliente.
 
 La primera version del proyecto usaba un ESP8266 con Access Point, JSON y
 WebSocket. Ese diseño fue reemplazado: hoy no hay JSON sobre LoRa, ni
-validacion de comandos en el puente, ni firmware ESP8266 en el repositorio.
+autenticacion de comandos en el puente, ni firmware ESP8266 en el repositorio.
+El filtro estructural actual no sustituye al HMAC en backend/Jetson.

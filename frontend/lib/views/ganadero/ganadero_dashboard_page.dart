@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../common/session_actions.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_typography.dart';
+import '../../data/services/esp32_ble_bridge_service.dart';
 import '../../viewmodels/auth_view_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
-import '../../data/services/esp32_ble_bridge_service.dart';
+import '../common/bovisense_ui.dart';
+import '../common/session_actions.dart';
 import 'conteo_detalle_page.dart';
 import 'ganadero_nav.dart';
-import 'widgets/ganadero_design_system.dart';
+import 'widgets/ganadero_widgets.dart';
 
 class GanaderoDashboardPage extends StatefulWidget {
   const GanaderoDashboardPage({super.key});
@@ -49,7 +52,7 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
     );
 
     return Scaffold(
-      appBar: GanaderoAppBar(
+      appBar: AppTopBar(
         titleText: 'Panel principal',
         actions: const [SessionActionsMenu()],
       ),
@@ -69,14 +72,13 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
           padding: const EdgeInsets.all(16),
           children: [
             Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 CircleAvatar(
                   radius: 20,
-                  backgroundColor: GanaderoColors.surfaceAlt,
+                  backgroundColor: AppColors.primaryLight,
                   child: const Icon(
                     Icons.person_rounded,
-                    color: GanaderoColors.primary,
+                    color: AppColors.primary,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -88,20 +90,12 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                         'Hola, ${usuario?.nombreCorto ?? 'Ganadero'}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: GanaderoColors.textDark,
-                        ),
+                        style: Theme.of(context).textTheme.titleLarge,
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        (usuario?.rol ?? 'usuario'),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: GanaderoColors.muted,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        usuario?.rol ?? 'usuario',
+                        style: AppTypography.caption,
                       ),
                     ],
                   ),
@@ -118,9 +112,18 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
             const SizedBox(height: 16),
             const SectionTitle(text: 'Resumen'),
             if (vm.isLoadingDashboard && dashboard == null)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 28),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 28),
+                child: Center(
+                  child: Semantics(
+                    label: 'Cargando resumen',
+                    child: const SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                  ),
+                ),
               )
             else
               GridView.count(
@@ -142,6 +145,10 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                     status: dashboard != null && dashboard.alertasPendientes > 0
                         ? 'Pendiente'
                         : 'Listo',
+                    statusColor:
+                        dashboard != null && dashboard.alertasPendientes > 0
+                        ? AppColors.warning
+                        : AppColors.success,
                   ),
                 ],
               ),
@@ -163,23 +170,11 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
             const SizedBox(height: 16),
             const SectionTitle(text: 'Historial reciente'),
             if (dashboard == null || dashboard.conteosRecientes.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: GanaderoColors.card,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: GanaderoColors.borderSoft,
-                    width: 0.5,
-                  ),
-                ),
-                child: const Text(
-                  'Aún no hay conteos registrados.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: GanaderoColors.textSecondary,
-                  ),
-                ),
+              const EmptyState(
+                icon: Icons.history_rounded,
+                title: 'Aún no hay conteos registrados',
+                description:
+                    'Cuando termines un conteo aparecerá aquí con su resultado.',
               )
             else
               ...dashboard.conteosRecientes
@@ -210,10 +205,9 @@ class _GanaderoDashboardPageState extends State<GanaderoDashboardPage> {
                   ),
             if (vm.errorMessage != null) ...[
               const SizedBox(height: 8),
-              AlertCard(
-                title: 'Error',
-                description: vm.errorMessage!,
-                status: SimpleStatusType.error,
+              StatusBanner(
+                title: vm.errorMessage!,
+                tone: StatusBannerTone.error,
               ),
             ],
           ],

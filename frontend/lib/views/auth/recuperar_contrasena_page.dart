@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../viewmodels/auth_view_model.dart';
-import '../ganadero/widgets/ganadero_design_system.dart';
+import '../common/bovisense_ui.dart';
 
 class RecuperarContrasenaPage extends StatefulWidget {
   const RecuperarContrasenaPage({super.key, this.initialEmail});
@@ -78,42 +78,22 @@ class _RecuperarContrasenaPageState extends State<RecuperarContrasenaPage> {
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
-        appBar: AppBar(title: const Text('Recuperar contraseña')),
+        appBar: AppTopBar(titleText: 'Recuperar contraseña'),
         body: SafeArea(
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: GanaderoColors.successBg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: GanaderoColors.borderSoft,
-                    width: 0.5,
-                  ),
-                ),
-                child: const Text(
-                  'Ingresa tu correo corporativo para enviar un enlace de restablecimiento. '
-                  'Por seguridad, siempre mostraremos la misma confirmación.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.35,
-                    color: GanaderoColors.successText,
-                  ),
-                ),
+              const StatusBanner(
+                title: 'Recuperación por correo',
+                description:
+                    'Ingresa tu correo corporativo para enviar un enlace de '
+                    'restablecimiento. Por seguridad, siempre mostraremos la '
+                    'misma confirmación.',
+                tone: StatusBannerTone.info,
               ),
               const SizedBox(height: 14),
-              Container(
+              BoviCard(
                 padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: GanaderoColors.card,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: GanaderoColors.borderSoft,
-                    width: 0.5,
-                  ),
-                ),
                 child: Form(
                   key: _formKey,
                   autovalidateMode: AutovalidateMode.onUserInteraction,

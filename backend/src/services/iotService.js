@@ -15,7 +15,8 @@ function createIotService(db) {
             ? COMMANDS[body.command]
             : null;
         if (!requested) throw new HttpError(400, 'Comando no permitido.');
-        const now = Math.floor(Date.now() / 1000);
+        const issuedAtMs = Date.now();
+        const now = Math.floor(issuedAtMs / 1000);
         return db.runTransaction(async tx => {
             const ticketRef = tickets.doc(requestId);
             const prior = await tx.get(ticketRef);
@@ -60,7 +61,9 @@ function createIotService(db) {
             }
             const expires = now + 60;
             const frame = commandFrame({ requestId, expires, command, sessionId });
-            const data = { uid, requested, command, request_id: requestId, session_id: sessionId, frame, issued: now, expires, expires_at: new Date((now + 86400) * 1000) };
+            const data = { uid, requested, command, request_id: requestId, session_id: sessionId, frame, issued: now,
+                issued_at_ms: issuedAtMs, lease_session_id: active.session_id || null,
+                expires, expires_at: new Date((now + 86400) * 1000) };
             tx.create(ticketRef, data);
             return data;
         });
@@ -74,21 +77,46 @@ function createIotService(db) {
             if (!data || data.uid !== uid || data.session_id !== result.sessionId) throw new HttpError(403, 'Respuesta ajena a la solicitud.');
             const now = Math.floor(Date.now() / 1000);
             if (data.response && data.response !== raw) throw new HttpError(409, 'La solicitud ya tiene otra respuesta.');
-            if (!data.response && (result.timestamp < data.issued - 5 || result.timestamp > data.expires + 30 || Math.abs(now - result.timestamp) > 300)) {
+            if (data.response) {
+                // Respuesta ya verificada (replay): se devuelve el resultado
+                // cacheado sin reaplicar transiciones. Antes se repetian los
+                // efectos y un IDLE antiguo podia liberar la reserva de la
+                // sesion que estuviera activa en ese momento, incluso de otro
+                // usuario.
+                const wasTerminal = ['STOPPED', 'RESULT'].includes(result.status) && result.count !== null;
+                return {
+                    status: result.status,
+                    session: result.sessionId,
+                    count: result.count === null ? 'unknown' : String(result.count),
+                    device_id: deviceId(),
+                    proof: wasTerminal ? raw : null,
+                };
+            }
+            if (result.timestamp < data.issued - 5 || result.timestamp > data.expires + 30 || Math.abs(now - result.timestamp) > 300) {
                 throw new HttpError(409, 'Respuesta vencida. Consulta de nuevo el resultado.');
             }
             const terminal = ['STOPPED', 'RESULT'].includes(result.status) && result.count !== null;
             let session;
             if (result.sessionId !== '-') session = await tx.get(sessions.doc(result.sessionId));
             const device = await tx.get(deviceRef());
+            const deviceData = device.data() || {};
+            // H no lleva sesion en la trama, pero no puede invalidar una
+            // confirmacion posterior de la reserva que observo al emitirse.
+            let leaseSession;
+            if (result.sessionId === '-' && deviceData.uid === uid
+                && deviceData.session_id && data.lease_session_id === deviceData.session_id) {
+                leaseSession = await tx.get(sessions.doc(deviceData.session_id));
+            }
             if (session && (!session.exists || session.data().uid !== uid)) throw new HttpError(403, 'Sesion invalida.');
             if (session && terminal && session.data().proof && session.data().count !== result.count) throw new HttpError(409, 'El resultado final ya fue registrado con otra cantidad.');
             if (terminal && (!session || !result.completedAt || result.completedAt > result.timestamp + 5 || result.completedAt * 1000 < session.data().started_at.toDate().getTime() - 5000)) throw new HttpError(400, 'Fecha de finalizacion invalida.');
             tx.update(ticket.ref, { response: raw });
-            if (session && !session.data().proof) {
+            const issuedAtMs = data.issued_at_ms ?? data.issued * 1000;
+            const newerState = session && issuedAtMs < (session.data().last_response_issued_ms || 0);
+            if (session && !session.data().proof && (terminal || !newerState)) {
                 tx.update(session.ref, terminal
-                    ? { status: result.status, count: result.count, proof: raw, finished_at: new Date(result.completedAt * 1000) }
-                    : { status: result.status, ...(data.command === 'S' && result.status === 'STARTED' ? { started_at: new Date(result.timestamp * 1000) } : {}) });
+                    ? { status: result.status, count: result.count, proof: raw, finished_at: new Date(result.completedAt * 1000), last_response_issued_ms: issuedAtMs }
+                    : { status: result.status, last_response_issued_ms: issuedAtMs, ...(data.command === 'S' && result.status === 'STARTED' ? { started_at: new Date(result.timestamp * 1000) } : {}) });
                 if ((terminal || result.status === 'ERROR') && device.data()?.session_id === result.sessionId) {
                     tx.update(device.ref, { lease_until: 0 });
                 }
@@ -97,7 +125,16 @@ function createIotService(db) {
             // reinicio o el worker termino fuera de la app). Si no se libera
             // aqui, el siguiente INICIARCONTEO se convierte en ESTADOCONTEO
             // contra una sesion que ya no existe y la app queda atascada.
-            if (result.status === 'IDLE' && device.data()?.session_id) {
+            //
+            // Solo se libera la reserva propia: la respuesta debe referirse a
+            // la sesion que el backend cree activa, o (en una consulta H sin
+            // sesion) pertenecer al uid del lease. Un IDLE de otro usuario, o
+            // fuera de orden, no debe tumbar la sesion vigente.
+            const ownsLease = deviceData.session_id === result.sessionId
+                || (result.sessionId === '-' && deviceData.uid === uid
+                    && data.lease_session_id === deviceData.session_id);
+            const newerLeaseState = leaseSession && issuedAtMs < (leaseSession.data()?.last_response_issued_ms || 0);
+            if (result.status === 'IDLE' && deviceData.session_id && ownsLease && !newerState && !newerLeaseState) {
                 tx.update(device.ref, { lease_until: 0, session_id: FieldValue.delete() });
             }
             return { status: result.status, session: result.sessionId, count: result.count === null ? 'unknown' : String(result.count), device_id: deviceId(), proof: terminal ? raw : null };

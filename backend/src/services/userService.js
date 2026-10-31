@@ -10,6 +10,7 @@ function createUserService({ db, auth, FieldValue, enviarActivacion }) {
     // Auth and Firestore cannot share a transaction. A durable operation blocks
     // access during partial changes and lets the same request resume safely.
     async function execute(uid, action, payload, actor) {
+        const contrasenaInicial = action === 'create' ? generarPasswordInicial(payload.nombre, payload.apellidos) : null;
         const lease = randomUUID();
         const fingerprint = createHash('sha256').update(JSON.stringify({ action, payload })).digest('hex');
         const opRef = operations.doc(uid);
@@ -52,11 +53,12 @@ function createUserService({ db, auth, FieldValue, enviarActivacion }) {
                 }
             } else if (action === 'create') {
                 try {
-                    await auth.createUser({ uid, email: payload.correo, password: generarPasswordInicial(), displayName: `${payload.nombre} ${payload.apellidos}`, disabled: payload.estado !== 'activo' });
+                    await auth.createUser({ uid, email: payload.correo, password: contrasenaInicial, displayName: `${payload.nombre} ${payload.apellidos}`, disabled: payload.estado !== 'activo' });
                 } catch (error) {
                     if (error.code !== 'auth/uid-already-exists') throw error;
                     const existing = await auth.getUser(uid);
                     if (existing.email !== payload.correo) throw new HttpError(409, 'El identificador ya pertenece a otra cuenta.');
+                    await auth.updateUser(uid, { password: contrasenaInicial });
                 }
             } else {
                 await auth.updateUser(uid, { email: payload.correo, displayName: `${payload.nombre} ${payload.apellidos}`, disabled: payload.estado !== 'activo' });
@@ -80,8 +82,7 @@ function createUserService({ db, auth, FieldValue, enviarActivacion }) {
             });
             if (action === 'create') {
                 try {
-                    const enlace = await auth.generatePasswordResetLink(payload.correo);
-                    await enviarActivacion({ correo: payload.correo, nombreCompleto: `${payload.nombre} ${payload.apellidos}`, enlace });
+                    await enviarActivacion({ correo: payload.correo, nombreCompleto: `${payload.nombre} ${payload.apellidos}`, contrasenaInicial });
                     await opRef.update({ activation_pending: false });
                 } catch (error) {
                     console.error(JSON.stringify({ event: 'activation_mail_pending', code: error.code || 'mail/error' }));

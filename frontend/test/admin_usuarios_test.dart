@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:frontend/data/models/usuario_model.dart';
 import 'package:frontend/data/repositories/admin_usuario_repository.dart';
 import 'package:frontend/data/services/api_client.dart';
+import 'package:frontend/views/admin/widgets/filter_chip_row.dart';
 import 'package:frontend/views/admin/widgets/user_card.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -178,4 +179,46 @@ void main() {
       expect(deleted, 1);
     },
   );
+
+  testWidgets('an inactive account is shown as disabled', (tester) async {
+    await pumpCard(
+      tester,
+      model: usuario().copyWith(estado: 'inactivo'),
+      isSelf: false,
+      onDelete: () {},
+    );
+
+    expect(find.text('Desactivado'), findsOneWidget);
+    expect(find.text('Cuenta desactivada'), findsOneWidget);
+  });
+
+  testWidgets('the filter chips show the count of each category', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FilterChipRow(
+            selected: AdminFilterType.all,
+            counts: const {
+              AdminFilterType.all: 12,
+              AdminFilterType.active: 10,
+              AdminFilterType.inactive: 2,
+              AdminFilterType.admins: 3,
+            },
+            onSelected: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Todos'), findsOneWidget);
+    expect(find.text('12'), findsOneWidget);
+    expect(find.text('Activos'), findsOneWidget);
+    expect(find.text('10'), findsOneWidget);
+    expect(find.text('Inactivos'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(find.text('Admin'), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+  });
 }

@@ -16,10 +16,23 @@ test('strict validation rejects coercion and path injection', () => {
     for (const value of [null, [], 'hello']) assert.throws(() => object(value));
 });
 
-test('initial credentials are cryptographically random', () => {
-    const values = new Set(Array.from({ length: 100 }, () => generarPasswordInicial('Ana', 'Perez')));
-    assert.equal(values.size, 100);
-    assert.ok([...values].every(value => value.length >= 40));
+test('initial passwords use the first name initial and first surname', () => {
+    assert.equal(generarPasswordInicial('Pedro', 'Carbon'), 'pcarbon');
+    assert.equal(generarPasswordInicial(' Pedro José ', ' Carbón López '), 'pcarbon');
+    assert.equal(generarPasswordInicial('JOSÉ', 'PÉREZ'), 'jperez');
+    assert.equal(generarPasswordInicial('Ángela', 'Núñez'), 'anunez');
+    assert.equal(generarPasswordInicial('Ana', "O'Connor"), 'aoconnor');
+});
+
+test('short initial passwords meet the Firebase minimum length', () => {
+    assert.equal(generarPasswordInicial('Ana', 'Li'), 'ali000');
+    assert.equal(generarPasswordInicial('Luis', 'Paz'), 'lpaz00');
+});
+
+test('initial passwords reject names without usable characters', () => {
+    for (const [nombre, apellidos] of [[null, 'Carbon'], ['Pedro', undefined], ['', 'Carbon'], ['Pedro', '   '], ['!!!', 'Carbon']]) {
+        assert.throws(() => generarPasswordInicial(nombre, apellidos), error => error.status === 400);
+    }
 });
 
 test('authenticated frames reject manipulation and foreign keys', () => {

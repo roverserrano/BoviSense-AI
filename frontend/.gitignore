@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+#agents
+/agents/build/
+.agents/
+.github/
+.metadata
+firebase.json
+
+README.md
+run_usb.sh

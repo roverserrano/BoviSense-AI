@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../viewmodels/auth_view_model.dart';
+import '../common/bovisense_ui.dart';
 
 class CambiarContrasenaPage extends StatefulWidget {
   const CambiarContrasenaPage({super.key});
@@ -71,167 +73,147 @@ class _CambiarContrasenaPageState extends State<CambiarContrasenaPage> {
     final rule = _PasswordRule.from(_nuevaCtrl.text.trim());
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Cambiar contraseña')),
+      appBar: AppTopBar(titleText: 'Cambiar contraseña'),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const _InfoCard(),
+            const StatusBanner(
+              title: 'Seguridad de la cuenta',
+              description:
+                  'Para cambiar la contraseña necesitamos confirmar tu '
+                  'contraseña actual. Evita usar datos personales o '
+                  'contraseñas repetidas.',
+              tone: StatusBannerTone.info,
+            ),
             const SizedBox(height: 14),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Form(
-                  key: _formKey,
-                  autovalidateMode: AutovalidateMode.onUserInteraction,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      TextFormField(
-                        controller: _actualCtrl,
-                        obscureText: _obscureActual,
-                        textInputAction: TextInputAction.next,
-                        decoration: InputDecoration(
-                          labelText: 'Contraseña actual',
-                          suffixIcon: IconButton(
-                            onPressed: () {
-                              setState(() => _obscureActual = !_obscureActual);
-                            },
-                            icon: Icon(
-                              _obscureActual
-                                  ? Icons.visibility_outlined
-                                  : Icons.visibility_off_outlined,
-                            ),
+            BoviCard(
+              padding: const EdgeInsets.all(16),
+              child: Form(
+                key: _formKey,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextFormField(
+                      controller: _actualCtrl,
+                      obscureText: _obscureActual,
+                      textInputAction: TextInputAction.next,
+                      decoration: InputDecoration(
+                        labelText: 'Contraseña actual',
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setState(() => _obscureActual = !_obscureActual);
+                          },
+                          tooltip: _obscureActual
+                              ? 'Mostrar contraseña'
+                              : 'Ocultar contraseña',
+                          icon: Icon(
+                            _obscureActual
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
                           ),
                         ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Ingresa tu contraseña actual';
-                          }
-                          return null;
-                        },
                       ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _nuevaCtrl,
-                        obscureText: _obscureNueva,
-                        textInputAction: TextInputAction.next,
-                        onChanged: (_) => setState(() {}),
-                        decoration: InputDecoration(
-                          labelText: 'Nueva contraseña',
-                          suffixIcon: IconButton(
-                            onPressed: () {
-                              setState(() => _obscureNueva = !_obscureNueva);
-                            },
-                            icon: Icon(
-                              _obscureNueva
-                                  ? Icons.visibility_outlined
-                                  : Icons.visibility_off_outlined,
-                            ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Ingresa tu contraseña actual';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _nuevaCtrl,
+                      obscureText: _obscureNueva,
+                      textInputAction: TextInputAction.next,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        labelText: 'Nueva contraseña',
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setState(() => _obscureNueva = !_obscureNueva);
+                          },
+                          tooltip: _obscureNueva
+                              ? 'Mostrar contraseña'
+                              : 'Ocultar contraseña',
+                          icon: Icon(
+                            _obscureNueva
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
                           ),
                         ),
-                        validator: (value) {
-                          final input = value?.trim() ?? '';
-                          if (input.isEmpty) {
-                            return 'Ingresa una nueva contraseña';
-                          }
-                          if (input == _actualCtrl.text.trim()) {
-                            return 'La nueva contraseña debe ser distinta';
-                          }
-                          if (!_PasswordRule.from(input).isStrong) {
-                            return 'Usa una contraseña más robusta';
-                          }
-                          return null;
-                        },
                       ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _confirmarCtrl,
-                        obscureText: _obscureConfirmar,
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) {
-                          if (!vm.isChangingPassword) {
-                            _submit();
-                          }
-                        },
-                        decoration: InputDecoration(
-                          labelText: 'Confirmar nueva contraseña',
-                          suffixIcon: IconButton(
-                            onPressed: () {
-                              setState(
-                                () => _obscureConfirmar = !_obscureConfirmar,
-                              );
-                            },
-                            icon: Icon(
-                              _obscureConfirmar
-                                  ? Icons.visibility_outlined
-                                  : Icons.visibility_off_outlined,
-                            ),
+                      validator: (value) {
+                        final input = value?.trim() ?? '';
+                        if (input.isEmpty) {
+                          return 'Ingresa una nueva contraseña';
+                        }
+                        if (input == _actualCtrl.text.trim()) {
+                          return 'La nueva contraseña debe ser distinta';
+                        }
+                        if (!_PasswordRule.from(input).isStrong) {
+                          return 'Usa una contraseña más robusta';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _confirmarCtrl,
+                      obscureText: _obscureConfirmar,
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) {
+                        if (!vm.isChangingPassword) {
+                          _submit();
+                        }
+                      },
+                      decoration: InputDecoration(
+                        labelText: 'Confirmar nueva contraseña',
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setState(
+                              () => _obscureConfirmar = !_obscureConfirmar,
+                            );
+                          },
+                          tooltip: _obscureConfirmar
+                              ? 'Mostrar contraseña'
+                              : 'Ocultar contraseña',
+                          icon: Icon(
+                            _obscureConfirmar
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
                           ),
                         ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Confirma la nueva contraseña';
-                          }
-                          if (value.trim() != _nuevaCtrl.text.trim()) {
-                            return 'Las contraseñas no coinciden';
-                          }
-                          return null;
-                        },
                       ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Confirma la nueva contraseña';
+                        }
+                        if (value.trim() != _nuevaCtrl.text.trim()) {
+                          return 'Las contraseñas no coinciden';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _SecurityChecklist(rule: rule),
+                    if (vm.errorMessage != null) ...[
                       const SizedBox(height: 12),
-                      _SecurityChecklist(rule: rule),
-                      if (vm.errorMessage != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          vm.errorMessage!,
-                          style: const TextStyle(color: Colors.red),
-                        ),
-                      ],
-                      const SizedBox(height: 18),
-                      FilledButton(
-                        onPressed: vm.isChangingPassword ? null : _submit,
-                        child: vm.isChangingPassword
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('Guardar nueva contraseña'),
+                      StatusBanner(
+                        title: vm.errorMessage!,
+                        tone: StatusBannerTone.error,
                       ),
                     ],
-                  ),
+                    const SizedBox(height: 18),
+                    PrimaryButton(
+                      label: 'Guardar nueva contraseña',
+                      isLoading: vm.isChangingPassword,
+                      onPressed: _submit,
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoCard extends StatelessWidget {
-  const _InfoCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text(
-              'Seguridad de la cuenta',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            SizedBox(height: 6),
-            Text(
-              'Para cambiar la contraseña necesitamos confirmar tu contraseña actual. '
-              'Evita usar datos personales o contraseñas repetidas.',
             ),
           ],
         ),
@@ -252,7 +234,11 @@ class _SecurityChecklist extends StatelessWidget {
       children: [
         const Text(
           'Tu nueva contraseña debe tener:',
-          style: TextStyle(fontWeight: FontWeight.w600),
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
+          ),
         ),
         const SizedBox(height: 6),
         _RuleLine(ok: rule.hasMinLength, text: 'Al menos 8 caracteres'),
@@ -272,19 +258,19 @@ class _RuleLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = ok ? Colors.green.shade700 : Colors.black54;
+    final color = ok ? AppColors.success : AppColors.muted;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
           Icon(
-            ok ? Icons.check_circle_outline_rounded : Icons.circle_outlined,
-            size: 18,
+            ok ? Icons.check_circle_rounded : Icons.circle_outlined,
+            size: 17,
             color: color,
           ),
           const SizedBox(width: 8),
-          Text(text, style: TextStyle(color: color)),
+          Text(text, style: TextStyle(fontSize: 13, color: color)),
         ],
       ),
     );

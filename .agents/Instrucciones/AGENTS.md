@@ -900,3 +900,336 @@ sudo fuser -v /dev/spidev0.0     # un solo proceso sobre el SX1278
 - Revisar el archivo `.codex` de la raiz (ignorado por Git): guarda contexto
   heredado con credenciales del hotspot.
 - `firestore.rules` y `firebase.json` siguen **sin desplegar**.
+
+## 22. Documentacion tecnica generada (2026-10-12)
+
+Se documento el proyecto completo con las skills `acquire-codebase-knowledge` y
+`architecture-blueprint-generator` (la skill `documentation-writer` que pidio el
+usuario **no esta instalada** en el repositorio, por lo que la redaccion se hizo
+con las otras dos mas criterio propio). El punto de entrada es `docs/README.md`,
+que enlaza:
+
+- `docs/codebase/` — los siete documentos obligatorios de la skill: `STACK.md`,
+  `STRUCTURE.md`, `ARCHITECTURE.md`, `CONVENTIONS.md`, `INTEGRATIONS.md`,
+  `TESTING.md`, `CONCERNS.md`, mas la salida cruda del escaner
+  (`.codebase-scan.txt`).
+- `docs/arquitectura/` — `blueprint.md` (arquitectura completa con ADR y guia de
+  extension), `modulos.md`, `diagramas.md` (C4, componentes, secuencia, estados y
+  despliegue en Mermaid), `api-http.md`, `integraciones-iot.md`,
+  `flujos-datos.md`, `despliegue.md` y `desarrollo.md`.
+
+Marcadores usados: `PENDIENTE DE VERIFICACIÓN` (no comprobable desde el
+repositorio) y `[ASK USER]` (decision de equipo). El analisis no modifico codigo
+de la aplicacion ni `docs/seguridad-y-despliegue.md`. Hallazgos nuevos de esta
+revision que conviene atender: `backend/src/routes/usuarioRoute.js` no esta
+montado (evidencia: `backend/src/app.js:59` monta `usuarioRoutes.js`),
+`comunicacion-iot/shared/` pertenece a la etapa JSON/WebSocket descartada, y los
+dos `google-services.json` estan versionados mientras `.env` y la cuenta de
+servicio estan correctamente ignorados.
+
+## 23. Ejecucion del plan consolidado (2026-10-12)
+
+El usuario aprobo el plan de `docs/planning/` y se ejecutaron las fases que no
+requieren hardware.
+
+### Cambios realizados
+
+1. **F1 - cerrado el acceso sin autenticar del receptor (critico).**
+   `jetson/lora_jetson_rx.py` aceptaba tramas sin firma (`BRIDGE|...`, `CMD:...`)
+   y las ejecutaba sobre el controlador de sesion, respondiendo
+   `RESP|...|JETSON_COUNT|...` sin HMAC. Ese camino es alcanzable por cualquier
+   emisor LoRa cercano. Se elimino el despacho heredado completo y los helpers
+   que solo el usaba (`build_count_response`, `build_jetson_status_response`,
+   `clean_field`, `read_power_mode`, `read_uptime`, `read_cpu_temp`,
+   `read_memory`, `read_load_average` y el import de `socket`). Ahora cualquier
+   trama que no empiece por `C1|` se registra y se descarta. Prueba de regresion:
+   `test_unsigned_frames_never_execute_commands`.
+2. **F2 - higiene de secretos y configuracion.** Se redactaron las dos
+   credenciales en claro de `pasos.txt` y la contrasena del hotspot en `.codex`
+   (archivos locales ignorados por Git), sustituyendolas por un marcador de
+   redaccion. Barrido posterior (`ghp_`, `sk-`, `AKIA`, claves privadas y
+   cadenas de 64 hex) sin hallazgos: los unicos 64-hex son hashes de
+   `skills-lock.json` y `pubspec.lock`. Se limpio `.gitignore` de reglas sin
+   efecto (`AGENTS.md` y `/backend/google-services.json`) y se documento por que
+   se versionan. **Falta que el usuario rote las credenciales.**
+3. **F6 - cobertura de pruebas.** Nueva suite `jetson/test_tracking_logic.py`
+   (9 casos: filtro de cajas pequenas, filtrado de kwargs por firma, conteo por
+   identidad en los trackers interno y legacy, seleccion de motor con
+   degradacion explicita y verificacion del GMC con camara en movimiento). Nuevas
+   pruebas de integracion del backend: mezcla de colecciones heredadas sin
+   duplicar ids y manejo de trazas, limite de cuerpo y JSON invalido.
+4. **F7 - integracion continua.** `.github/workflows/ci.yml` con cuatro jobs
+   (backend unitario, integracion con emuladores, Flutter y Jetson). No necesita
+   secretos: los emuladores se inicializan con `demo-bovisense` y el propio test
+   anula SMTP.
+5. **Ajuste de soporte:** el limite de tasa ahora es configurable con
+   `RATE_LIMIT_MAX` (120 por defecto). Motivo: la suite de integracion hace
+   muchas peticiones desde la misma IP y el valor fijo hacia el resultado
+   dependiente del limite.
+6. **Trazabilidad:** se actualizaron `docs/planning/*` (estados de requisitos,
+   tareas y conflictos) y `docs/codebase/TESTING.md` con los conteos reales.
+
+### Archivos modificados
+
+- `jetson/lora_jetson_rx.py` (camino heredado eliminado), `jetson/test_secure_protocol.py`
+- `jetson/test_tracking_logic.py` (**nuevo**), `jetson/run_bovino.py` (aviso
+  explicito del riesgo del ReID al arrancar)
+- `backend/src/app.js` (`RATE_LIMIT_MAX`), `backend/test/integration/api.test.js`
+- `.github/workflows/ci.yml` (**nuevo**), `.gitignore`
+- `pasos.txt` y `.codex` (solo las lineas con credenciales, redactadas)
+- `docs/planning/*`, `docs/codebase/TESTING.md`, `docs/codebase/STACK.md`,
+  `docs/arquitectura/despliegue.md`, `AGENTS.md`
+
+### Pruebas ejecutadas
+
+| Prueba | Resultado |
+| --- | --- |
+| `cd jetson && python3 -m unittest test_secure_protocol.py` | 22/22 |
+| `cd jetson && python3 -m unittest test_tracking_logic.py` | 9/9 |
+| `python3 -m py_compile` de los tres scripts de la Jetson | correcto |
+| Integracion backend con emuladores | 12/12 |
+| `cd frontend && flutter analyze && flutter test` | sin hallazgos y 32/32 |
+| `find backend -name '*.js' -not -path '*/node_modules/*' \| xargs node --check` | correcto |
+| Validacion del workflow con PyYAML | 4 jobs validos |
+
+### Errores resueltos
+
+- Receptor que ejecutaba comandos sin firma (hallazgo critico C-01).
+- Credenciales en claro en el arbol de trabajo (C-04, parcial: falta rotar).
+- `.gitignore` que ignoraba archivos versionados (C-06).
+- Prueba de integracion propia escrita con un `timestamp` fuera de la ventana
+  que valida el backend (`-60 s`): corregida a `-4 s`.
+
+### Observacion nueva
+
+`C-14`: el listado de conteos deduplica ids entre colecciones, pero el contador
+del dashboard suma documentos por coleccion. Si el mismo id existe en ambas
+ubicaciones, el panel muestra un total mayor que el historial. Queda cubierto por
+prueba y pendiente de decision (migrar datos o contar ids unicos).
+
+### Problemas pendientes
+
+- **Desplegar el receptor actualizado** en la Jetson: `lora_jetson_rx.py` cambio
+  y hasta copiarlo el servicio sigue aceptando tramas sin firma.
+- **Rotar las credenciales** expuestas (GitHub, proveedor de LLM, hotspot).
+- F4/F5 bloqueadas por hardware; F3 y F8 pendientes de decision.
+- `revicion.txt` sigue sin informe de auditoria asociado (C-11).
+
+### Siguiente paso recomendado
+
+Copiar `jetson/lora_jetson_rx.py` y `jetson/secure_protocol.py` a
+`/home/cow/Documents/Script/`, reiniciar `bovisense-lora.service`, confirmar en el
+log que una trama sin firma se descarta y que el flujo C1/R1 sigue funcionando.
+
+## 24. Documentacion generada y correcciones de desfases (2026-10-17)
+
+Sesion de documentacion. La skill `code-documentation` quedo instalada en
+`.agents/skills/code-documentation` (con registro en `skills-lock.json`, que si
+esta versionado).
+
+### Artefactos
+
+- Nuevos: `CHANGELOG.md`, `CONTRIBUTING.md`, `backend/README.md` y
+  `.agents/Instrucciones/InformeAuditoria.md` (el informe de auditoria, aportado
+  por el usuario).
+- `frontend/README.md` reescrito (reemplaza la plantilla generada por Flutter);
+  `jetson/README.md`, `README.md` raiz y `docs/README.md` actualizados como
+  indices.
+- Un subagente corrigio desfases en `docs/codebase/*` y
+  `docs/arquitectura/*`: referencias de linea reverificadas contra `b94fcda`,
+  estado real del CI (existe, 4 jobs), conteos de pruebas y ruta
+  `.agents/Instrucciones/AGENTS.md`. Verificacion de enlaces: 0 rotos en los 7
+  archivos revisados.
+- `docs/planning/` no se toco (registro historico del usuario).
+
+### Pendientes de decision que quedaron documentados
+
+- No existe `LICENSE`; el README no lo menciona a proposito.
+- El `.gitignore` local (sin commitear) reintroduce reglas que ignoran
+  `AGENTS.md`, `skills-lock.json`, `firebase.json`, `google-services.json` y
+  `/frontend/run_usb.sh`, contra el estado versionado, donde son parte del
+  proyecto. Decision del usuario; no se toco.
+
+## 25. Mejoras del Informe de Auditoria (2026-10-17)
+
+Se ejecuto la parte de `.agents/Instrucciones/InformeAuditoria.md`
+(sobre `dev@b94fcda`) que no depende de hardware ni de decisiones de producto:
+los dos P0 y los P1 de contrato, recuperacion, cierre y cola de comandos. El
+informe completo, con las fichas BOV-HIGH/MED/LOW y el backlog T01-T14, sigue en
+`.agents/Instrucciones/InformeAuditoria.md`; alli viven los pendientes.
+
+### Cambios realizados
+
+1. **BOV-HIGH-001 (P0) — replay del protocolo.** `iotService.verify` ya no
+   reaplica transiciones cuando la respuesta ya estaba verificada: devuelve el
+   resultado cacheado (misma trama) sin tocar `IotDevices`/`IotSessions`.
+   Ademas, la liberacion por `IDLE` quedo limitada a la sesion que el backend
+   cree activa o al dueno del lease (`uid`): un `IDLE` de otro usuario, o fuera
+   de orden, ya no puede tumbar la reserva vigente. Antes, un replay de un
+   ticket de A durante una sesion de B liberaba la sesion de B (reproducido).
+2. **BOV-HIGH-004 (P0) — terminacion forzada.** En `lora_jetson_rx.stop()`, si
+   el worker no atiende `SIGTERM` y hay que usar `SIGKILL`, la respuesta es
+   `ERROR` con detalle `forced_termination` y sin conteo (el ultimo acumulado no
+   es confiable); antes se respondia `STOPPED` con ese conteo y la app podia
+   guardarlo como final. El backend ya no emite prueba terminal para `ERROR` y
+   `POST /conteos` lo rechaza.
+3. **BOV-HIGH-002 (P1) — contrato de `H`.** `status()` sin sesion solicitada
+   (comando `H`) responde disponibilidad: `IDLE` sin sesion alguna,
+   `RUNNING` durante el conteo (sin filtrar el conteo en curso) y `READY` al
+   terminar. Antes respondia el ultimo `STOPPED` con su conteo y sesion `-`, y
+   el backend rechazaba la trama ("Fecha de finalizacion invalida"). `Q` de una
+   sesion finalizada ahora responde con la fecha de cierre original, no una
+   fabricada al responder.
+4. **BOV-HIGH-003 (P1, lado receptor) — recuperacion durable.**
+   `finish_session` persiste el final en la tabla `results` de SQLite antes de
+   responder (`persist_result`), y `R`/`T`/`Q` recuperan ese resultado tras un
+   reinicio del receptor (`recover_stored_result`), con la sesion y la fecha de
+   cierre originales. La app aun no ofrece el flujo de "recuperar pendiente"
+   tras reconexion (parte movil del hallazgo, pendiente).
+5. **BOV-HIGH-006 (P1) — cierre limpio.** El receptor instala un manejador de
+   `SIGTERM` (`shutdown_signal_handler` -> `KeyboardInterrupt`) para que el
+   `finally` de `main` detenga el worker y cierre el SPI; con el manejador por
+   defecto el proceso moria sin limpiar y el worker quedaba huerfano.
+6. **BOV-MED-001 (P1) — paginacion con fechas iguales.** Cursor compuesto
+   `fechaEnMillis_id` en `ganaderoController.listOwnedMerged`, orden
+   descendente que desempata por id y `startAfter` compuesto en la
+   subcoleccion; la coleccion heredada se filtra en memoria con el mismo
+   criterio (ventana acotada de 200). Los grupos mas grandes que la pagina se
+   recorren en varias paginas en vez de perderse. Se acepta un cursor antiguo
+   (solo fecha) con la semantica anterior.
+7. **BOV-MED-003 (P1) — cola de comandos BLE.** `CommandQueue.invalidate()`
+   descarta lo pendiente; el servicio invalida la cola al desconectar,
+   reconectar, apagar el Bluetooth o disponerse; la sesion vigente se captura
+   al encolar; y `issueCommand` envia `session_id` explicito cuando se conoce,
+   para que el backend no convierta el comando contra una sesion nueva.
+
+### Archivos modificados
+
+- `backend/src/services/iotService.js`,
+  `backend/src/controllers/ganaderoController.js`,
+  `backend/test/integration/api.test.js` (3 pruebas nuevas).
+- `jetson/lora_jetson_rx.py`, `jetson/test_secure_protocol.py` (7 pruebas
+  nuevas).
+- `frontend/lib/core/utils/command_queue.dart`,
+  `frontend/lib/data/services/esp32_ble_bridge_service.dart`,
+  `frontend/lib/data/repositories/ganadero_repository.dart`,
+  `frontend/test/command_queue_test.dart` (2 pruebas nuevas).
+- `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/codebase/TESTING.md`,
+  `frontend/README.md`, `jetson/README.md` (conteos de pruebas al dia).
+
+### Pruebas ejecutadas
+
+| Prueba | Comando | Resultado |
+| --- | --- | --- |
+| Backend unitario | `cd backend && npm test` | 4/4 |
+| Backend integracion | `firebase emulators:exec --only auth,firestore --project demo-bovisense "npm --prefix backend run test:integration"` con JDK 21 | 15/15 (3 nuevas) |
+| Jetson receptor | `cd jetson && python3 -m unittest test_secure_protocol.py` | 29/29 (7 nuevas) |
+| Jetson tracking | `cd jetson && python3 -m unittest test_tracking_logic.py` | 9/9 |
+| Flutter analisis | `cd frontend && flutter analyze` | sin hallazgos |
+| Flutter tests | `cd frontend && flutter test` | 34/34 (2 nuevas) |
+| Formato Dart | `dart format --output=none --set-exit-if-changed lib test` | sin cambios pendientes |
+| Sintaxis Jetson | `python3 -m py_compile` de los tres scripts | correcto |
+
+Nota de las pruebas Jetson nuevas: la de terminacion forzada usa un proceso hijo
+real que ignora `SIGTERM` (con handshake de preparacion) para reproducir el
+`SIGKILL`; la de recuperacion usa una base SQLite temporal. Ninguna toca el
+SX1278.
+
+### Hallazgos de la auditoria NO ejecutados en esta sesion
+
+- **BOV-HIGH-005** (watchdog de captura del worker): requiere validacion con
+  camara/Argus real; no se toco `run_bovino.py` en esta sesion.
+- **BOV-HIGH-007/HIGH-008** (identidad unica del tracking y auditoria del
+  modelo): dependen de un protocolo de campo y de artefactos del modelo que no
+  estan en el repositorio.
+- **BOV-HIGH-003 parte movil**: recuperar el resultado pendiente despues de una
+  reconexion (persistir la sesion en la app y ofrecer "Recuperar resultado").
+- **BOV-MED-002** (coleccion heredada), **MED-004** (umbrales del tracker),
+  **MED-005** (TTL/memoria), **MED-006/MED-007** (BLE/brownout, hardware),
+  **MED-008** (despliegue reproducible), **MED-009** (autoedicion admin),
+  **MED-010** (reconciliacion por 401/403) y **LOW-001/LOW-002**: decisiones de
+  producto/hardware o cambios de mayor alcance; el informe los deja como
+  propuestas.
+
+### Despliegue de esta sesion
+
+- Jetson: copiar `jetson/lora_jetson_rx.py` a `/home/cow/Documents/Script/` y
+  reiniciar `bovisense-lora.service` (el backend, si corre con `npm run dev`, se
+  recarga solo; la app solo necesita hot restart).
+- Sin commit: todos los cambios siguen locales, como el resto del arbol.
+
+### Siguiente paso recomendado
+
+1. Sesion real `H -> S -> Q -> T -> R` con la version nueva del receptor:
+   comprobar que `H` responde `READY`/`RUNNING` (nunca el `STOPPED` viejo),
+   que detener deja `STOPPED` guardable y que un cierre forzado responde
+   `ERROR`.
+2. Probar el reinicio del receptor en medio de un conteo: `R` debe recuperar el
+   resultado persistido con la fecha original.
+3. Decidir los pendientes de producto (coleccion heredada, TTL, brownout,
+   autoedicion admin) antes de planear hardware.
+
+## 26. Refactorizacion UI/UX por etapas (2026-10-18)
+
+### Objetivo
+
+Aplicar la guia `.agents/Instrucciones/refactorizacion-ui-ux.md` por etapas
+(diagnostico, sistema de diseno, autenticacion, administrador, ganadero, conteo
+y QA) sin tocar firmware, LoRa, Jetson, backend, reglas de Firebase, contratos
+de API ni la logica de conteo y BLE: solo presentacion.
+
+### Cambios realizados
+
+- **Etapa 2 (sistema de diseno):** `DESIGN.md` en la raiz; tokens unicos en
+  `frontend/lib/core/theme/` (`app_colors.dart`, `app_typography.dart`,
+  `app_theme.dart` con `ThemeData` M3: botones, campos, tarjetas, dialogos,
+  chips, avisos, snackbars y navegacion); componentes compartidos en
+  `frontend/lib/views/common/bovisense_ui.dart` (`AppTopBar`, `BoviCard`,
+  `SectionTitle`, `StatusChip`, `StatusBanner`, `StatusBar`, `StatCard`,
+  `EmptyState`, `PrimaryButton`, `OutlineActionButton`, `StopButton`,
+  `TechnicalDetails`) y del ganadero en
+  `frontend/lib/views/ganadero/widgets/ganadero_widgets.dart`
+  (`NextStepCard`, `HistoryItem`, `StepFlowItem`, `ResultHero`,
+  `GanaderoBottomNavBar`, `AlertItem`).
+- **Etapa 3 (autenticacion):** login, recuperar y cambiar contrasena, splash y
+  acciones de sesion migrados; se conservaron textos y flujos exactos.
+- **Etapa 4 (administracion):** panel, formulario de usuario, tarjeta de
+  usuario, busqueda, filtros y dialogo de borrado migrados; se eliminaron
+  `admin_tokens.dart`, `section_label.dart`, `admin_empty_state.dart` y
+  `admin_fab.dart` (sustituidos por el kit compartido y el FAB estandar).
+- **Etapa 5 (ganadero):** dashboard, finca, historial y detalle de conteo
+  migrados; `ganadero_nav.dart` no requeria cambios (solo logica).
+- **Etapa 6 (conteo):** `estado_dispositivo_page.dart` migrado de forma
+  quirurgica: misma logica BLE/CommandQueue, mismos comandos y textos; solo
+  cambio de componentes y tokens.
+- **Etapa 7 (QA):** se elimino el shim `ganadero_design_system.dart` y los
+  alias `GanaderoColors`/`GanaderoAppBar`; se agrego
+  `frontend/test/design_system_test.dart` (contraste WCAG de los tokens, tema
+  global y componentes compartidos) y se actualizaron los conteos en
+  `docs/codebase/TESTING.md`, `CONTRIBUTING.md` y `frontend/README.md`.
+
+### Pruebas ejecutadas
+
+- `flutter analyze`: sin hallazgos.
+- `flutter test`: **43/43** (34 previos + 9 del sistema de diseno).
+- Backend y Jetson: sin cambios en esta sesion.
+
+### Decisiones de presentacion
+
+- Paleta agrotech centralizada (`#185441`, `#10382E`, `#E5F0E9`, `#D4A447`,
+  `#F7F9F6`) con contraste verificado numericamente; el dorado es de relleno
+  (no texto sobre claro) y el verde atenuado se oscurecio a `#5A6E61`.
+- Los bordes de controles usan `borderStrong` (#788D81, 3.5:1) para cumplir
+  WCAG 1.4.11; los estados nunca dependen solo del color.
+- Sin cambios de datos ni de API: la app conserva Provider/IndexedStack,
+  `CommandQueue`, sesiones BLE y todos los textos que las pruebas fijan.
+
+### Siguiente paso recomendado
+
+1. Prueba visual en un telefono real (login, panel, finca, conteo de punta a
+   punta) antes de commitear, ya que la refactorizacion es solo local.
+2. Si se aprueba, commitear por etapas `frontend/` + `DESIGN.md` + docs.
+3. Retomar los pendientes de la auditoria que siguen abiertos
+   (parte movil de BOV-HIGH-003, MED-002/MED-004..MED-010).
+
+

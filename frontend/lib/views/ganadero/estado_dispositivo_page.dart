@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../data/services/esp32_ble_bridge_service.dart';
 import '../../viewmodels/ganadero_view_model.dart';
+import '../common/bovisense_ui.dart';
 import '../common/session_actions.dart';
 import 'ganadero_nav.dart';
-import 'widgets/ganadero_design_system.dart';
+import 'widgets/ganadero_widgets.dart';
 
 class EstadoDispositivoPage extends StatefulWidget {
   const EstadoDispositivoPage({super.key});
@@ -266,7 +268,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
     final countFailed = countStatus?.failed == true;
 
     return Scaffold(
-      appBar: GanaderoAppBar(
+      appBar: AppTopBar(
         titleText: 'Conteo',
         actions: const [SessionActionsMenu()],
       ),
@@ -494,7 +496,7 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
         const Text(
           'El conteo se actualiza solo cada pocos segundos.',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 11, color: GanaderoColors.muted),
+          style: TextStyle(fontSize: 11.5, color: AppColors.muted),
         ),
         const SizedBox(height: 12),
         TechnicalDetails(
@@ -632,44 +634,29 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
 
     return Column(
       children: [
-        StatusBar(
-          status: SimpleStatusType.error,
-          label: title,
-          subtitle: subtitle,
-        ),
-        const SizedBox(height: 16),
-        Container(
-          width: double.infinity,
+        BoviCard(
           padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: GanaderoColors.card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: GanaderoColors.borderSoft, width: 0.5),
-          ),
           child: Column(
             children: [
               const Icon(
                 Icons.warning_amber_rounded,
                 size: 44,
-                color: GanaderoColors.redText,
+                color: AppColors.error,
               ),
               const SizedBox(height: 10),
               Text(
                 title,
                 style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: GanaderoColors.textDark,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
                 ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
               Text(
                 subtitle,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: GanaderoColors.muted,
-                ),
+                style: const TextStyle(fontSize: 12.5, color: AppColors.muted),
                 textAlign: TextAlign.center,
               ),
               if (others.isNotEmpty) ...[
@@ -677,8 +664,8 @@ class _EstadoDispositivoPageState extends State<EstadoDispositivoPage> {
                 Text(
                   'Bluetooth en uso por: ${others.take(4).join(', ')}',
                   style: const TextStyle(
-                    fontSize: 11,
-                    color: GanaderoColors.muted,
+                    fontSize: 11.5,
+                    color: AppColors.muted,
                   ),
                   textAlign: TextAlign.center,
                 ),

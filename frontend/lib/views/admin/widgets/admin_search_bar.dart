@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'admin_tokens.dart';
-
 class AdminSearchBar extends StatelessWidget {
   const AdminSearchBar({
     super.key,
@@ -20,9 +18,9 @@ class AdminSearchBar extends StatelessWidget {
         return TextField(
           controller: controller,
           onChanged: onChanged,
+          textInputAction: TextInputAction.search,
           decoration: InputDecoration(
-            hintText: 'Buscar usuario...',
-            helperText: 'Nombre, apellido, correo o cédula',
+            hintText: 'Buscar por nombre, correo o cédula...',
             prefixIcon: const Icon(Icons.search_rounded),
             suffixIcon: controller.text.isNotEmpty
                 ? IconButton(
@@ -31,36 +29,9 @@ class AdminSearchBar extends StatelessWidget {
                       onChanged('');
                     },
                     icon: const Icon(Icons.close_rounded),
-                    tooltip: 'Limpiar',
+                    tooltip: 'Limpiar búsqueda',
                   )
                 : null,
-            filled: true,
-            fillColor: AdminPalette.card,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 14,
-              vertical: 12,
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(
-                color: AdminPalette.border,
-                width: 0.5,
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(
-                color: AdminPalette.border,
-                width: 0.5,
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(
-                color: AdminPalette.primary,
-                width: 1,
-              ),
-            ),
           ),
         );
       },

@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../data/models/configuracion_sistema_model.dart';
 import '../../viewmodels/ganadero_view_model.dart';
+import '../common/bovisense_ui.dart';
 import '../common/session_actions.dart';
 import 'ganadero_nav.dart';
-import 'widgets/ganadero_design_system.dart';
+import 'widgets/ganadero_widgets.dart';
 
 class ConfiguracionSistemaPage extends StatefulWidget {
   const ConfiguracionSistemaPage({super.key});
@@ -113,7 +115,7 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
     _applyConfig(vm.configuracion);
 
     return Scaffold(
-      appBar: GanaderoAppBar(
+      appBar: AppTopBar(
         titleText: 'Finca',
         actions: const [SessionActionsMenu()],
       ),
@@ -127,21 +129,34 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
           children: [
-            _GroupCard(
+            BoviCard(
+              padding: const EdgeInsets.all(16),
               child: Column(
-                //crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const _FormHeader(
-                    title: 'Registro de la finca',
-                    subtitle: 'Completa estos datos para continuar.',
+                  const Text(
+                    'Registro de la finca',
+                    style: TextStyle(
+                      fontSize: 16,
+                      height: 1.25,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Completa estos datos para continuar.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: _nombreFincaController,
+                    textInputAction: TextInputAction.next,
                     decoration: const InputDecoration(
-                      hintText: 'Nombre de la finca',
+                      labelText: 'Nombre de la finca',
+                      prefixIcon: Icon(Icons.home_work_outlined),
                     ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
@@ -150,13 +165,20 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
                       return null;
                     },
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 14),
                   TextFormField(
                     controller: _cantidadEsperadaController,
                     keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
                     decoration: const InputDecoration(
-                      hintText: 'Cantidad esperada de ganado',
+                      labelText: 'Cantidad esperada de ganado',
+                      prefixIcon: Icon(Icons.groups_2_outlined),
                     ),
+                    onFieldSubmitted: (_) {
+                      if (!vm.isSavingConfig) {
+                        _save();
+                      }
+                    },
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
                         return 'Ingresa la cantidad esperada';
@@ -171,7 +193,7 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
                       return null;
                     },
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 18),
                   PrimaryButton(
                     label: vm.isSavingConfig ? 'Guardando...' : 'Guardar',
                     onPressed: vm.isSavingConfig ? null : _save,
@@ -188,57 +210,6 @@ class _ConfiguracionSistemaPageState extends State<ConfiguracionSistemaPage> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _FormHeader extends StatelessWidget {
-  const _FormHeader({required this.title, required this.subtitle});
-
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: GanaderoColors.textDark,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          subtitle,
-          style: const TextStyle(
-            fontSize: 12,
-            color: GanaderoColors.textSecondary,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _GroupCard extends StatelessWidget {
-  const _GroupCard({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: GanaderoColors.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: GanaderoColors.borderSoft, width: 0.5),
-      ),
-      child: child,
     );
   }
 }

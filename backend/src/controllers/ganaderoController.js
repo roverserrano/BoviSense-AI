@@ -1,5 +1,5 @@
 const { db, FieldValue } = require('../config/firebaseAdmin');
-const { Timestamp } = require('firebase-admin/firestore');
+const { FieldPath, Timestamp } = require('firebase-admin/firestore');
 const { object, text, integer, documentId, hexId, HttpError, respondError } = require('../utils/validation');
 const { createIotService } = require('../services/iotService');
 const iot = createIotService(db);
@@ -159,53 +159,76 @@ async function getRecentAlertas(uid, refs, limit = 5) {
         .slice(0, limit);
 }
 
-function parseCursorDate(value) {
+// Cursor compuesto `fechaEnMillis_id`. La fecha sola no basta cuando varios
+// registros comparten el mismo instante (importaciones o conteos seguidos):
+// el cursor temporal excluia todo el grupo y los registros restantes quedaban
+// inaccesibles. Se sigue aceptando un cursor antiguo (solo fecha): en ese caso
+// se omite el grupo completo, como antes.
+function parseCursor(value) {
     if (!value) return null;
-    const parsed = new Date(String(value));
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    const text = String(value);
+    const separator = text.indexOf('_');
+    if (separator > 0) {
+        const millis = Number(text.slice(0, separator));
+        const id = text.slice(separator + 1);
+        if (Number.isFinite(millis) && id) return { millis, id };
+    }
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? null : { millis: parsed.getTime(), id: '' };
+}
+
+function isBeforeCursor(doc, sortField, cursor) {
+    if (!cursor) return true;
+    const millis = timestampMillis(doc.data()?.[sortField]);
+    if (millis !== cursor.millis) return millis < cursor.millis;
+    return doc.id < cursor.id;
 }
 
 // Lista mezclando la subcoleccion del usuario con la coleccion heredada y
 // devuelve un cursor real.
 //
-// Antes la primera pagina respondia siempre `next_cursor: null`, asi que la app
-// nunca pedia mas: el historial y las alertas quedaban cortados en 30 registros.
-// El cursor es la fecha del ultimo registro devuelto (en ISO) y se avanza con
-// `startAfter`, sin partir grupos que comparten la misma fecha.
+// Antes solo se pedia `limit + 1` de la subcoleccion y el cursor excluia toda
+// la fecha: con mas registros que la pagina compartiendo fecha, los sobrantes
+// no se recuperaban en ninguna pagina. Ahora el cursor es (fecha, id), el
+// orden desempata por id descendente y la subcoleccion se consulta con
+// `startAfter` compuesto, sin partir grupos: un grupo mas grande que la pagina
+// se recorre en varias paginas. La coleccion heredada (sin indice para
+// ordenar) se filtra en memoria con el mismo criterio dentro de una ventana
+// acotada.
+const LEGACY_SCAN_LIMIT = 200;
 async function listOwnedMerged(uid, refs, name, sortField, cursorValue, limit = 30) {
     const ref = name === 'Conteos' ? refs.conteosRef : refs.alertasRef;
-    const cursor = parseCursorDate(cursorValue);
-    let request = ref.orderBy(sortField, 'desc').limit(limit + 1);
-    if (cursor) request = request.startAfter(Timestamp.fromDate(cursor));
+    const cursor = parseCursor(cursorValue);
+    const fetchLimit = limit + 1;
+    let request = ref.orderBy(sortField, 'desc')
+        .orderBy(FieldPath.documentId(), 'desc')
+        .limit(fetchLimit);
+    if (cursor) request = request.startAfter(Timestamp.fromMillis(cursor.millis), cursor.id);
 
     const [current, legacy] = await Promise.all([
         request.get(),
-        db.collection(name).where('uid', '==', uid).limit(200).get(),
+        db.collection(name).where('uid', '==', uid).limit(LEGACY_SCAN_LIMIT).get(),
     ]);
 
     const docsById = new Map();
     for (const doc of [...legacy.docs, ...current.docs]) {
-        const millis = timestampMillis(doc.data()?.[sortField]);
-        if (cursor && millis >= cursor.getTime()) continue;
+        if (!isBeforeCursor(doc, sortField, cursor)) continue;
         docsById.set(doc.id, doc);
     }
-    const docs = [...docsById.values()]
-        .sort((a, b) => timestampMillis(b.data()?.[sortField]) - timestampMillis(a.data()?.[sortField]));
+    const docs = [...docsById.values()].sort((a, b) => {
+        const difference = timestampMillis(b.data()?.[sortField]) - timestampMillis(a.data()?.[sortField]);
+        if (difference !== 0) return difference;
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+    });
 
-    // Nunca cortar un grupo con la misma fecha: si se cortara, el cursor
-    // (que excluye toda la fecha) perderia los registros restantes.
-    let take = Math.min(limit, docs.length);
-    if (take > 0 && docs.length > take) {
-        const boundary = timestampMillis(docs[take - 1].data()?.[sortField]);
-        while (take < docs.length && timestampMillis(docs[take].data()?.[sortField]) === boundary) take++;
-    }
-
-    const page = docs.slice(0, take);
-    const lastMillis = page.length ? timestampMillis(page[page.length - 1].data()?.[sortField]) : 0;
-    const hasMore = docs.length > take || current.docs.length > limit;
+    const page = docs.slice(0, limit);
+    const last = page[page.length - 1];
+    const hasMore = docs.length > page.length || current.docs.length >= fetchLimit;
     return {
         docs: page,
-        next_cursor: hasMore && lastMillis > 0 ? new Date(lastMillis).toISOString() : null,
+        next_cursor: hasMore && last
+            ? `${timestampMillis(last.data()?.[sortField])}_${last.id}`
+            : null,
     };
 }
 

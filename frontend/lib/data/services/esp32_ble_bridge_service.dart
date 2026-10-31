@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../../viewmodels/session_notifier.dart';
 import '../../core/utils/command_queue.dart';
+import '../../core/utils/iot_ble_protocol.dart';
 import '../../core/utils/request_id.dart';
 import '../repositories/ganadero_repository.dart';
 import 'api_client.dart';
@@ -216,8 +217,8 @@ class Esp32BleBridgeService extends SessionNotifier {
   Completer<String>? _reply;
   Completer<BluetoothDevice?>? _found;
   String? _requestId;
-  String _buffer = '';
-  bool _receiving = false;
+  String? _requestSession;
+  final IotBleFrameDecoder _decoder = IotBleFrameDecoder();
   bool _sending = false;
   int _generation = 0;
   Timer? _poll;
@@ -291,9 +292,10 @@ class Esp32BleBridgeService extends SessionNotifier {
       _scheduleCountPoll();
       return;
     }
+    final generation = _generation;
     unawaited(
       requestCountingStatus().catchError((Object _) {
-        if (disposed) return;
+        if (!_current(generation)) return;
         _errorMessage = 'No se pudo recuperar el estado del conteo.';
         notifyListeners();
         _scheduleCountPoll(failures: _pollFailures + 1);
@@ -341,8 +343,10 @@ class Esp32BleBridgeService extends SessionNotifier {
       return;
     }
     final startedAt = DateTime.now();
+    final generation = _generation;
     try {
       await requestCountingStatus();
+      if (!_current(generation)) return;
       // Mantiene la cadencia real aunque la consulta tarde: el intervalo se
       // cuenta desde que empezo, no desde que respondio.
       final elapsed = DateTime.now().difference(startedAt);
@@ -351,7 +355,7 @@ class Esp32BleBridgeService extends SessionNotifier {
         delay: remaining.isNegative ? const Duration(seconds: 1) : remaining,
       );
     } catch (_) {
-      if (disposed) return;
+      if (!_current(generation)) return;
       _errorMessage = 'No se pudo actualizar el conteo. Consulta su estado.';
       notifyListeners();
       _scheduleCountPoll(failures: _pollFailures + 1);
@@ -366,6 +370,7 @@ class Esp32BleBridgeService extends SessionNotifier {
   Future<void> scanAndConnect() async {
     if (disposed || isBusy || isConnected) return;
     final generation = ++_generation;
+    _commands.invalidate();
     _errorMessage = null;
     _failure = Esp32BleBridgeFailure.none;
     _otherBluetoothDevices = const [];
@@ -667,66 +672,66 @@ class Esp32BleBridgeService extends SessionNotifier {
         _state == Esp32BleBridgeState.connecting;
     _failure = Esp32BleBridgeFailure.bluetoothOff;
     _errorMessage = failureMessage(Esp32BleBridgeFailure.bluetoothOff);
+    // El apagado invalida lo encolado o en vuelo: se ejecutaria contra una
+    // conexion que ya no existe.
+    ++_generation;
+    _commands.invalidate();
     if (active) unawaited(_release());
     _setState(Esp32BleBridgeState.adapterOff);
   }
 
   void _receive(List<int> bytes) {
     if (disposed) return;
-    for (final byte in bytes) {
-      if (byte == 126) {
-        _buffer = '';
-        _receiving = true;
-      } else if (byte == 10 && _receiving) {
-        final frame = _buffer;
-        _buffer = '';
-        _receiving = false;
-        final parts = frame.split('|');
-        if (parts.length == 8 &&
-            parts[0] == 'R1' &&
-            parts[1] == _requestId &&
-            _reply != null &&
-            !_reply!.isCompleted) {
-          _event(
-            'R1 recibido id=${_shortId(parts[1])} estado=${parts[3]}',
-            direction: 'BLE RX',
-          );
-          _reply!.complete(frame);
-        } else if (parts.isNotEmpty && parts.first == 'R1') {
-          _event(
-            'R1 ignorado id=${parts.length > 1 ? _shortId(parts[1]) : '-'}',
-            direction: 'BLE RX',
-          );
-        } else if (parts.length >= 4 &&
-            parts[0] == 'B0' &&
-            parts[1] == _requestId &&
-            _reply != null &&
-            !_reply!.isCompleted) {
-          final reason = parts.sublist(3).join('|');
-          _event('Puente reporto error: $reason', direction: 'BLE RX');
-          _reply!.complete(frame);
-        }
-      } else if (_receiving &&
-          byte >= 32 &&
-          byte <= 126 &&
-          _buffer.length < 200) {
-        _buffer += String.fromCharCode(byte);
-      } else {
-        _receiving = false;
-        _buffer = '';
+    for (final frame in _decoder.add(bytes)) {
+      if (!IotBleProtocol.matchesReply(frame, _requestId, _requestSession) ||
+          _reply == null ||
+          _reply!.isCompleted) {
+        continue;
       }
+      final parts = frame.split('|');
+      _event(
+        parts[0] == 'R1'
+            ? 'R1 recibido id=${_shortId(parts[1])} estado=${parts[3]}'
+            : 'Puente reporto error: ${parts[3]}',
+        direction: 'BLE RX',
+      );
+      _reply!.complete(frame);
     }
   }
 
   /// Encola un comando hacia el equipo.
   ///
   /// Encolar en vez de rechazar evita que el sondeo automatico (que dura
-  /// varios segundos) bloquee "Detener" o "Actualizar conteo".
-  Future<void> sendCommand(String command) {
-    return _commands.add(() => _sendCommand(command));
+  /// varios segundos) bloquee "Detener" o "Actualizar conteo". El contexto se
+  /// captura al encolar (sesion vigente en ese momento) y la cola se invalida
+  /// al desconectar o reconectar: una tarea de una conexion anterior no debe
+  /// ejecutarse contra la conexion siguiente.
+  Future<void> sendCommand(String command) async {
+    final generation = _generation;
+    final sessionId = sessionCommands.contains(command)
+        ? _sessionForCommand()
+        : null;
+    await _commands.add<void>(
+      () => _sendCommand(command, sessionId: sessionId),
+    );
+    if (!_current(generation)) {
+      throw Exception(
+        'Conexion interrumpida. Consulta el estado al reconectar.',
+      );
+    }
   }
 
-  Future<void> _sendCommand(String command) async {
+  /// Sesion vigente para un comando de sesion, capturada al encolar.
+  ///
+  /// `null` si la app no conoce una sesion real ('none' o el marcador local):
+  /// en ese caso el backend decide con la sesion activa del equipo.
+  String? _sessionForCommand() {
+    final sessionId = _latestCountStatus?.sessionId;
+    if (sessionId == null || sessionId.length != 32) return null;
+    return sessionId;
+  }
+
+  Future<void> _sendCommand(String command, {String? sessionId}) async {
     if (disposed || !isConnected || _rx == null) {
       throw Exception('Conecta primero el puente BLE.');
     }
@@ -740,28 +745,53 @@ class Esp32BleBridgeService extends SessionNotifier {
         'Solicitando ticket: $command -> ${_repository.apiBaseOrigin}',
         direction: 'API',
       );
-      final ticket = await _repository.issueCommand(command, newRequestId());
+      final ticket = await _repository.issueCommand(
+        command,
+        newRequestId(),
+        sessionId: sessionId,
+      );
       if (!_current(generation) || !isConnected) {
         throw Exception('Conexion interrumpida.');
       }
       _requestId = ticket['request_id'] as String;
+      _requestSession = ticket['session_id'] as String;
+      _decoder.reset();
       _event(
         'Ticket listo cmd=${ticket['command']} id=${_shortId(_requestId)} session=${_shortId(ticket['session_id'] as String?)}',
         direction: 'API',
       );
       _reply = Completer<String>();
-      // Attach the timeout before writing so disconnects never produce unhandled futures.
-      final response = _reply!.future.timeout(const Duration(seconds: 25));
-      final payload = ascii.encode('~${ticket['frame']}\n');
+      // El completer solo entrega datos (o vacio al desconectar). El timeout
+      // de respuesta empieza al terminar la escritura, sin futuros huerfanos.
+      final response = _reply!.future;
+      final commandFrame = ticket['frame'] as String;
+      if (commandFrame.length > IotBleProtocol.commandLimit) {
+        throw Exception('El servidor genero un comando demasiado largo.');
+      }
+      final payload = ascii.encode('~$commandFrame\n');
+      final writing = Stopwatch()..start();
       try {
-        for (var offset = 0; offset < payload.length; offset += 18) {
+        for (
+          var offset = 0;
+          offset < payload.length;
+          offset += IotBleProtocol.chunkSize
+        ) {
           if (!_current(generation) || _rx == null) {
             throw Exception('Conexion interrumpida.');
           }
-          await _rx!.write(
-            payload.sublist(offset, (offset + 18).clamp(0, payload.length)),
-            withoutResponse: false,
-          );
+          final remaining = IotBleProtocol.writeTimeout - writing.elapsed;
+          if (remaining <= Duration.zero) {
+            throw TimeoutException('Escritura BLE vencida');
+          }
+          await _rx!
+              .write(
+                payload.sublist(
+                  offset,
+                  (offset + IotBleProtocol.chunkSize).clamp(0, payload.length),
+                ),
+                withoutResponse: false,
+              )
+              .timeout(remaining);
         }
         _event(
           'Comando enviado al ESP32 (${payload.length} bytes)',
@@ -772,7 +802,12 @@ class Esp32BleBridgeService extends SessionNotifier {
         if (!_reply!.isCompleted) _reply!.complete('');
       }
       _event('Esperando respuesta R1 de Jetson', direction: 'LoRa');
-      final frame = await response;
+      final frame = await response.timeout(IotBleProtocol.responseTimeout);
+      if (!_current(generation) || !isConnected) {
+        throw Exception(
+          'Conexion interrumpida. Consulta el estado al reconectar.',
+        );
+      }
       if (frame.isEmpty) {
         throw Exception(
           'Conexion interrumpida. Consulta el estado al reconectar.',
@@ -783,7 +818,11 @@ class Esp32BleBridgeService extends SessionNotifier {
       }
       _event('Verificando R1 con backend', direction: 'API');
       final verified = await _repository.verifyResponse(frame);
-      if (!_current(generation)) return;
+      if (!_current(generation)) {
+        throw Exception(
+          'Conexion interrumpida. Consulta el estado al reconectar.',
+        );
+      }
       final fields = verified.map(
         (key, value) => MapEntry(key, value?.toString() ?? ''),
       );
@@ -821,6 +860,8 @@ class Esp32BleBridgeService extends SessionNotifier {
         'El prototipo no respondio. Consulta el estado antes de repetir.',
       );
     } catch (error) {
+      // Un comando cancelado no debe parecer exitoso ni alterar la nueva conexion.
+      if (!_current(generation)) rethrow;
       if (sessionCommands.contains(command) && isStaleSessionError(error)) {
         _event(
           'La sesion ya no existe en el equipo; inicia un conteo nuevo.',
@@ -838,6 +879,7 @@ class Esp32BleBridgeService extends SessionNotifier {
     } finally {
       _reply = null;
       _requestId = null;
+      _requestSession = null;
       _sending = false;
       notifyListeners();
     }
@@ -869,6 +911,10 @@ class Esp32BleBridgeService extends SessionNotifier {
         return 'El puente recibio un comando vacio.';
       case 'lora_payload_too_long':
         return 'El comando supera el tamano permitido por LoRa.';
+      case 'lora_tx_timeout':
+        return 'La radio del puente no termino el envio. Espera y consulta el estado.';
+      case 'bridge_queue_full':
+        return 'El puente esta ocupado. Espera unos segundos y vuelve a consultar.';
       case 'lora_send_failed':
         return 'El puente no pudo enviar el comando por LoRa.';
       case 'bridge_busy_waiting_lora':
@@ -908,8 +954,7 @@ class Esp32BleBridgeService extends SessionNotifier {
     final device = _device;
     _device = null;
     _rx = null;
-    _buffer = '';
-    _receiving = false;
+    _decoder.reset();
     await scan?.cancel();
     await connection?.cancel();
     await notifications?.cancel();
@@ -927,6 +972,7 @@ class Esp32BleBridgeService extends SessionNotifier {
 
   Future<void> disconnect() async {
     ++_generation;
+    _commands.invalidate();
     _latestCountStatus = null;
     _latestJetsonStatus = null;
     _setState(Esp32BleBridgeState.disconnected);
@@ -936,6 +982,7 @@ class Esp32BleBridgeService extends SessionNotifier {
   @override
   void dispose() {
     ++_generation;
+    _commands.invalidate();
     super.dispose();
     unawaited(_adapterWatch?.cancel() ?? Future<void>.value());
     unawaited(_release());

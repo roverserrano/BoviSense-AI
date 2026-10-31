@@ -7,6 +7,9 @@ import signal
 import argparse
 import threading
 import json
+import inspect
+import tempfile
+import fcntl
 import numpy as np
 import tensorrt as trt
 
@@ -19,8 +22,11 @@ except Exception:
 TRT_LOGGER = trt.Logger(trt.Logger.INFO)
 FRAME_QUEUE_SIZE = 2
 VIS_QUEUE_SIZE = 2
-EXHAUSTIVE_FRAME_QUEUE_SIZE = 0
+EXHAUSTIVE_FRAME_QUEUE_SIZE = 4  # Backpressure: nunca acumular el video entero en RAM.
 EOS_FRAME = object()
+SUCCESS_REASONS = {"finished", "eof", "signal", "user_stop"}
+STOP_REASON_LOCK = threading.RLock()
+WORKER_METADATA = {}
 WORKER_SESSION_ID = os.getenv("BOVISENSE_SESSION_ID", "")
 WORKER_STATUS_FILE = os.getenv("BOVISENSE_STATUS_FILE", "")
 WORKER_RESULT_FILE = os.getenv("BOVISENSE_RESULT_FILE", "")
@@ -75,6 +81,7 @@ def current_perf_stats():
 
 
 def reset_runtime_stats():
+    WORKER_METADATA.clear()
     with COUNT_STATS_LOCK:
         COUNT_STATS["last_visible_count"] = None
         COUNT_STATS["max_visible_count"] = None
@@ -89,14 +96,41 @@ def reset_runtime_stats():
         PERF_STATS["ended_at"] = None
 
 
+def request_stop(stop_event, stop_reason, reason):
+    """El primer error prevalece sobre señales, EOF y solicitudes posteriores."""
+    with STOP_REASON_LOCK:
+        if stop_reason is not None:
+            previous = stop_reason.get("value", "finished")
+            if previous in SUCCESS_REASONS:
+                stop_reason["value"] = reason
+    stop_event.set()
+
+
 def write_worker_json(path, payload):
+    """Publicación atómica: lectores nunca ven JSON parcial ni truncado."""
     if not path:
-        return
+        return True
+    temporary = None
     try:
-        with open(path, "w", encoding="utf-8") as file:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(path)),
+            prefix=".bovisense-", delete=False,
+        ) as file:
+            temporary = file.name
             json.dump(payload, file, ensure_ascii=False)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+        return True
     except Exception as exc:
         print(f"WORKER_STATUS|status=error|detail=status_file_error:{exc}", flush=True)
+        return False
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def emit_worker_status(status, detail="", visible_count=None):
@@ -110,6 +144,7 @@ def emit_worker_status(status, detail="", visible_count=None):
         "last_visible_count": stats["last_visible_count"],
         "max_visible_count": stats["max_visible_count"],
         "frames_processed": stats["frames_processed"],
+        **WORKER_METADATA,
     }
     if visible_count is not None:
         payload["visible_count"] = int(visible_count)
@@ -129,9 +164,11 @@ def emit_worker_status(status, detail="", visible_count=None):
 def emit_worker_result(reason):
     stats = current_count_stats()
     perf = current_perf_stats()
-    final_count = stats["total_unique_count"]
+    if reason in SUCCESS_REASONS and stats["frames_processed"] == 0:
+        reason = "no_frames_processed"
+    result_status = "finished" if reason in SUCCESS_REASONS else "error"
+    final_count = stats["total_unique_count"] if result_status == "finished" else None
     count_text = "unknown" if final_count is None else str(int(final_count))
-    result_status = "error" if reason in ("capture_open_failed", "inference_error") else "finished"
     ended_at = time.time()
     elapsed_s = ended_at - float(perf.get("started_at") or ended_at)
     processing_fps = stats["frames_processed"] / max(elapsed_s, 1e-6)
@@ -149,9 +186,14 @@ def emit_worker_result(reason):
         "processing_fps": processing_fps,
         "source_fps": perf["source_fps"],
         "updatedAt": time.time(),
+        "partial_count": stats["total_unique_count"],
+        **WORKER_METADATA,
     }
+    if not write_worker_json(WORKER_RESULT_FILE, payload):
+        payload.update(status="error", reason="result_write_failed", count=None)
+        reason, count_text = "result_write_failed", "unknown"
     print(
-        f"COUNT_FINAL|count={count_text}|reason={reason}|"
+        f"COUNT_FINAL|count={count_text}|reason={reason}|status={payload['status']}|"
         f"frames={stats['frames_processed']}",
         flush=True,
     )
@@ -165,7 +207,7 @@ def emit_worker_result(reason):
         f"source_fps={0.0 if perf['source_fps'] is None else perf['source_fps']:.3f}",
         flush=True,
     )
-    write_worker_json(WORKER_RESULT_FILE, payload)
+    return payload
 
 
 # ============================================================
@@ -408,7 +450,23 @@ def open_video_source(
 # TensorRT detector
 # ============================================================
 class TRTDetector:
-    def __init__(self, engine_path: str):
+    def __init__(self, engine_path: str, input_layout="auto", normalization="raw"):
+        self.stream = None
+        self.buffers = {}
+        self.context = None
+        self.engine = None
+        self.input_layout = input_layout
+        self.normalization = normalization
+        try:
+            self._initialize(engine_path)
+        except Exception:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                print(f"[TRT] Error liberando inicializacion parcial: {cleanup_error}", flush=True)
+            raise
+
+    def _initialize(self, engine_path):
         self.logger = TRT_LOGGER
         init_trt_plugins()
 
@@ -436,6 +494,8 @@ class TRTDetector:
             name = self.engine.get_tensor_name(i)
             mode = self.engine.get_tensor_mode(name)
             if mode == trt.TensorIOMode.INPUT:
+                if self.input_name is not None:
+                    raise RuntimeError("Se requiere un solo tensor de entrada de imagen")
                 self.input_name = name
             else:
                 self.output_names.append(name)
@@ -444,6 +504,13 @@ class TRTDetector:
             raise RuntimeError("No se encontró tensor de entrada")
 
         self.input_dtype = trt.nptype(self.engine.get_tensor_dtype(self.input_name))
+        if np.dtype(self.input_dtype) not in (np.dtype("float32"), np.dtype("float16"), np.dtype("uint8")):
+            raise RuntimeError(f"Tipo de entrada no soportado: {self.input_dtype}")
+        if self.input_dtype == np.uint8 and self.normalization != "raw":
+            raise RuntimeError("Una entrada uint8 requiere --normalization raw")
+        for expected in ("num_detections", "detection_boxes", "detection_scores", "detection_classes"):
+            if not any(expected in name.lower() for name in self.output_names):
+                raise RuntimeError(f"El engine SSD debe publicar {expected}; salidas={self.output_names}")
         self.input_engine_shape = tuple(self.engine.get_tensor_shape(self.input_name))
         self.buffers = {}
         self.current_input_shape = None
@@ -460,21 +527,22 @@ class TRTDetector:
         if len(shape) != 4:
             raise RuntimeError(f"Shape de entrada no soportado: {shape}")
 
-        n = 1 if shape[0] in (-1, 0) else int(shape[0])
-        h = 640 if shape[1] in (-1, 0) else int(shape[1])
-        w = 640 if shape[2] in (-1, 0) else int(shape[2])
-        c = 3 if shape[3] in (-1, 0) else int(shape[3])
-
-        if c != 3:
-            raise RuntimeError(f"Se esperaba NHWC con 3 canales, pero llegó: {shape}")
-
-        return (n, h, w, c)
+        if self.input_layout == "auto":
+            if shape[-1] == 3 and shape[1] != 3:
+                self.input_layout = "nhwc"
+            elif shape[1] == 3 and shape[-1] != 3:
+                self.input_layout = "nchw"
+            else:
+                raise RuntimeError(f"Layout ambiguo {shape}; especifica --input-layout nhwc/nchw")
+        expected = (1, 640, 640, 3) if self.input_layout == "nhwc" else (1, 3, 640, 640)
+        if any(actual not in (-1, wanted) for actual, wanted in zip(shape, expected)):
+            raise RuntimeError(f"Se requiere SSD 640x640 batch=1: esperado {expected}, engine {shape}")
+        return expected
 
     def _allocate_for_shape(self, input_shape):
-        try:
-            self.context.set_input_shape(self.input_name, input_shape)
-        except Exception:
-            pass
+        if any(d < 0 for d in self.input_engine_shape):
+            if not self.context.set_input_shape(self.input_name, input_shape):
+                raise RuntimeError(f"TensorRT rechazo el shape {input_shape}")
 
         self.current_input_shape = input_shape
         tensor_names = [self.input_name] + self.output_names
@@ -490,7 +558,7 @@ class TRTDetector:
             shape = tuple(self.context.get_tensor_shape(name))
             dtype = trt.nptype(self.engine.get_tensor_dtype(name))
 
-            if any(int(d) < 0 for d in shape):
+            if any(int(d) <= 0 for d in shape):
                 raise RuntimeError(
                     f"Shape no resuelto para tensor {name}: {shape}"
                 )
@@ -499,8 +567,6 @@ class TRTDetector:
             err, device_ptr = cudart.cudaMalloc(host.nbytes)
             check_cuda(err, f"cudaMalloc falló para {name}")
 
-            self.context.set_tensor_address(name, int(device_ptr))
-
             self.buffers[name] = {
                 "host": host,
                 "device": device_ptr,
@@ -508,19 +574,28 @@ class TRTDetector:
                 "dtype": dtype,
                 "nbytes": host.nbytes,
             }
+            if not self.context.set_tensor_address(name, int(device_ptr)):
+                raise RuntimeError(f"TensorRT rechazo el buffer de {name}")
 
             print(f"[TRT] Tensor {name}: shape={shape}, dtype={dtype}")
 
     def preprocess(self, frame_bgr):
-        n, h, w, c = self.current_input_shape
-        resized = cv2.resize(frame_bgr, (w, h), interpolation=cv2.INTER_LINEAR)
+        if frame_bgr is None or frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+            raise ValueError("Se requiere un frame BGR de tres canales")
+        resized = cv2.resize(frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
-        # El engine espera float32 NHWC
+        # Conservar 0..255 por defecto; la normalización depende del entrenamiento.
         inp = rgb.astype(np.float32)
+        if self.normalization == "zero_one":
+            inp /= 255.0
+        elif self.normalization == "minus_one_one":
+            inp = inp / 127.5 - 1.0
+        if self.input_layout == "nchw":
+            inp = np.transpose(inp, (2, 0, 1))
         inp = np.expand_dims(inp, axis=0)
 
-        return np.ascontiguousarray(inp)
+        return np.ascontiguousarray(inp, dtype=self.input_dtype)
 
     def infer(self, inp):
         inp_buf = self.buffers[self.input_name]
@@ -566,16 +641,24 @@ class TRTDetector:
         return outputs
 
     def close(self):
+        errors = []
         for _, buf in self.buffers.items():
             try:
-                cudart.cudaFree(buf["device"])
-            except Exception:
-                pass
+                check_cuda(cudart.cudaFree(buf["device"]), "cudaFree fallo")
+            except Exception as exc:
+                errors.append(str(exc))
 
-        try:
-            cudart.cudaStreamDestroy(self.stream)
-        except Exception:
-            pass
+        self.buffers.clear()
+        if self.stream is not None:
+            try:
+                check_cuda(cudart.cudaStreamDestroy(self.stream), "cudaStreamDestroy fallo")
+            except Exception as exc:
+                errors.append(str(exc))
+            self.stream = None
+        self.context = None
+        self.engine = None
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
 
 # ============================================================
@@ -591,7 +674,7 @@ def get_output(outputs, name, contains=False):
     return None
 
 
-def decode_detections(outputs, frame_shape, conf_th=0.45, box_format="yxyx"):
+def decode_detections(outputs, frame_shape, conf_th=0.45, box_format="yxyx", class_ids=None):
     h, w = frame_shape[:2]
 
     num = get_output(outputs, "num_detections", contains=True)
@@ -623,10 +706,12 @@ def decode_detections(outputs, frame_shape, conf_th=0.45, box_format="yxyx"):
     dets = []
     for i in range(n):
         score = float(scores[i])
-        if score < conf_th:
+        if not np.isfinite(score) or score < conf_th:
             continue
 
         box = boxes[i].astype(np.float32)
+        if box.size != 4 or not np.all(np.isfinite(box)) or not np.isfinite(classes[i]):
+            continue
 
         if box_format == "xyxy":
             x1, y1, x2, y2 = box.tolist()
@@ -649,6 +734,8 @@ def decode_detections(outputs, frame_shape, conf_th=0.45, box_format="yxyx"):
             continue
 
         cls = int(classes[i])
+        if class_ids is not None and cls not in class_ids:
+            continue
         dets.append((x1, y1, x2, y2, score, cls))
 
     return dets
@@ -1051,11 +1138,69 @@ def descriptor_similarity(desc_a, desc_b):
     return max(0.0, min(1.0, value))
 
 
+def bbox_min_side(box):
+    """Lado menor de una caja (x1, y1, x2, y2)."""
+    x1, y1, x2, y2 = (float(value) for value in box[:4])
+    return max(0.0, min(x2 - x1, y2 - y1))
+
+
+def filter_small_detections(detections, min_box_px=0.0):
+    """Descarta detecciones mas pequenas que min_box_px.
+
+    A 20-30 m de altitud una vaca ocupa decenas de pixeles, asi que las cajas
+    diminutas suelen ser ruido (pasto, sombras, reflejos). Filtrarlas antes del
+    tracker evita crear IDs falsos que despues se contarian como animales.
+    Con min_box_px <= 0 el filtro queda desactivado: comportamiento previo.
+    """
+    threshold = float(min_box_px or 0.0)
+    if threshold <= 0.0 or not detections:
+        return detections
+    return [det for det in detections if bbox_min_side(det) >= threshold]
+
+
+def package_version(module):
+    return str(getattr(module, "__version__", "desconocida"))
+
+
+def supported_kwargs(target, candidates):
+    """Separa los kwargs que la version instalada realmente acepta.
+
+    El paquete de tracking cambia nombres de parametros entre versiones. Si se
+    pasara un kwarg inexistente, el constructor lanzaria TypeError y el sistema
+    seguiria con el tracker interno sin que el usuario lo note. Filtrar por
+    firma evita esa degradacion silenciosa y deja constancia en el log.
+    """
+    try:
+        parameters = inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        return dict(candidates), []
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return dict(candidates), []
+    applied = {
+        key: value for key, value in candidates.items() if key in parameters
+    }
+    dropped = sorted(key for key in candidates if key not in parameters)
+    return applied, dropped
+
+
 class LegacyUniqueBovineTracker:
-    def __init__(self, max_missed=20, min_iou=0.10, max_distance=120.0):
+    def __init__(
+        self,
+        max_missed=20,
+        min_iou=0.10,
+        max_distance=120.0,
+        min_box_px=0.0,
+    ):
         self.max_missed = int(max_missed)
         self.min_iou = float(min_iou)
         self.max_distance = float(max_distance)
+        # 0 desactiva el filtro: con 0 el comportamiento es el de siempre.
+        self.min_box_px = float(min_box_px)
+        self.engine_name = "legacy_internal"
+        self.package_versions = {}
         self.next_track_id = 1
         self.total_count = 0
         self.tracks = {}
@@ -1095,6 +1240,7 @@ class LegacyUniqueBovineTracker:
         return iou - (dist / max(self.max_distance, 1.0)) * 0.05
 
     def update(self, detections, frame=None):
+        detections = filter_small_detections(detections, self.min_box_px)
         track_ids = list(self.tracks.keys())
         unmatched_tracks = set(track_ids)
         unmatched_detections = set(range(len(detections)))
@@ -1147,6 +1293,7 @@ class LegacyUniqueBovineTracker:
 
     def summary_fields(self):
         fields = dict(self.stats)
+        fields["engine"] = self.engine_name
         fields["unique_bovines"] = self.total_count
         return fields
 
@@ -1163,6 +1310,7 @@ class PersistentBovineTracker:
         match_thresh=0.10,
         gmc_method="orb",
         verbose_tracking=False,
+        min_box_px=0.0,
     ):
         self.max_missed = int(max_missed)
         self.min_iou = float(min_iou)
@@ -1171,12 +1319,21 @@ class PersistentBovineTracker:
         self.track_high_thresh = float(track_high_thresh)
         self.track_low_thresh = float(track_low_thresh)
         self.match_thresh = float(match_thresh)
+        self.min_box_px = float(min_box_px)
+        self.engine_name = "internal_persistent"
+        self.package_versions = {}
         self.next_track_id = 1
         self.total_count = 0
         self.tracks = {}
         self.counted_track_ids = set()
         self.gmc = ORBGlobalMotionCompensator() if gmc_method == "orb" else None
         self.gmc_method = gmc_method
+        if gmc_method not in ("orb", "none"):
+            print(
+                f"[TRACKER] El tracker interno solo implementa GMC con ORB; "
+                f"se ignora gmc={gmc_method}. Usa --tracker botsort para ECC.",
+                flush=True,
+            )
         self.verbose_tracking = bool(verbose_tracking)
         self.stats = {
             "tracks_created": 0,
@@ -1265,6 +1422,9 @@ class PersistentBovineTracker:
             det for det in detections
             if float(det[4]) >= self.track_low_thresh
         ]
+        usable_detections = filter_small_detections(
+            usable_detections, self.min_box_px
+        )
 
         track_ids = [
             track_id for track_id, track in self.tracks.items()
@@ -1277,6 +1437,8 @@ class PersistentBovineTracker:
         for track_id in track_ids:
             track = self.tracks[track_id]
             for det_idx, det in enumerate(usable_detections):
+                if track["cls_id"] != int(det[5]):
+                    continue
                 score = self._match_score(track["bbox"], det[:4])
                 if score is None:
                     continue
@@ -1312,10 +1474,14 @@ class PersistentBovineTracker:
                 continue
             track["missed"] += 1
             track["age"] += 1
+            if track["state"] == "tentative":
+                track["hits"] = 0
             if track["missed"] > self.max_missed:
                 track["state"] = "removed"
                 self.stats["tracks_removed"] += 1
                 self._event("TRACK_REMOVED", id=track_id, missed=track["missed"])
+                del self.tracks[track_id]
+                self.counted_track_ids.discard(track_id)  # IDs monotonicos, nunca se reutilizan.
             elif track["state"] == "confirmed":
                 track["state"] = "lost"
                 self._event("TRACK_LOST", id=track_id, missed=track["missed"])
@@ -1335,6 +1501,7 @@ class PersistentBovineTracker:
 
     def summary_fields(self):
         fields = dict(self.stats)
+        fields["engine"] = self.engine_name
         fields["unique_bovines"] = self.total_count
         return fields
 
@@ -1357,12 +1524,37 @@ class RoboflowBoTSORTBovineTracker:
         lost_track_max_seconds=5.0,
         lost_track_prediction="hold",
         verbose_tracking=False,
+        min_box_px=0.0,
+        tracker_kind="botsort",
     ):
         import supervision as sv
-        from trackers import BoTSORTTracker
+        import trackers as trackers_pkg
+
+        tracker_classes = {
+            "botsort": "BoTSORTTracker",
+            "bytetrack": "ByteTrackTracker",
+            "ocsort": "OCSORTTracker",
+        }
+        class_name = tracker_classes.get(str(tracker_kind).lower(), "BoTSORTTracker")
+        tracker_class = getattr(trackers_pkg, class_name, None)
+        if tracker_class is None:
+            available = ", ".join(
+                name for name in dir(trackers_pkg) if name.endswith("Tracker")
+            )
+            raise RuntimeError(
+                f"{class_name} no existe en la version instalada de trackers. "
+                f"Disponibles: {available or 'ninguna'}"
+            )
 
         self.sv = sv
+        self.tracker_kind = str(tracker_kind).lower()
+        self.engine_name = f"roboflow_{self.tracker_kind}"
+        self.package_versions = {
+            "trackers": package_version(trackers_pkg),
+            "supervision": package_version(sv),
+        }
         self.track_low_thresh = float(track_low_thresh)
+        self.min_box_px = float(min_box_px)
         self.identity_counted_ids = set()
         self.visible_track_ids = set()
         self.lost_track_ids = set()
@@ -1390,29 +1582,71 @@ class RoboflowBoTSORTBovineTracker:
             "reid_matches": 0,
             "reid_rejects": 0,
             "lost_display_frames": 0,
+            "counts_accepted": 0,
+            "count_rejected_already": 0,
         }
 
-        self.tracker = BoTSORTTracker(
-            lost_track_buffer=int(track_buffer),
-            frame_rate=float(frame_rate),
-            track_activation_threshold=float(track_high_thresh),
-            minimum_consecutive_frames=max(1, int(track_min_hits)),
-            minimum_iou_threshold_first_assoc=float(match_thresh),
-            minimum_iou_threshold_second_assoc=float(max(track_min_iou, match_thresh)),
-            minimum_iou_threshold_unconfirmed_assoc=float(max(track_min_iou, match_thresh)),
-            high_conf_det_threshold=float(track_high_thresh),
-            enable_cmc=self.enable_cmc,
-            cmc_method="orb" if gmc_method == "orb" else "sparseOptFlow",
-            cmc_downscale=2,
-            instant_first_frame_activation=False,
+        requested_cmc = str(gmc_method).lower().strip()
+        if not self.enable_cmc:
+            cmc_method = "none"
+        elif requested_cmc in ("orb", "ecc", "sparseoptflow"):
+            cmc_method = requested_cmc
+        else:
+            print(
+                f"[TRACKER] Metodo de GMC desconocido ({gmc_method}); se usa orb.",
+                flush=True,
+            )
+            cmc_method = "orb"
+
+        candidate_kwargs = {
+            "lost_track_buffer": int(track_buffer),
+            "frame_rate": float(frame_rate),
+            "track_activation_threshold": float(track_high_thresh),
+            "minimum_consecutive_frames": max(1, int(track_min_hits)),
+            "minimum_iou_threshold_first_assoc": float(match_thresh),
+            "minimum_iou_threshold_second_assoc": float(
+                max(track_min_iou, match_thresh)
+            ),
+            "minimum_iou_threshold_unconfirmed_assoc": float(
+                max(track_min_iou, match_thresh)
+            ),
+            "high_conf_det_threshold": float(track_high_thresh),
+            "enable_cmc": self.enable_cmc,
+            "cmc_method": cmc_method,
+            "cmc_downscale": 2,
+            "instant_first_frame_activation": False,
+        }
+        tracker_kwargs, dropped_kwargs = supported_kwargs(
+            tracker_class, candidate_kwargs
         )
+        self.tracker = tracker_class(**tracker_kwargs)
+        self.dropped_kwargs = dropped_kwargs
         print(
-            f"[TRACKER] BoT-SORT activo: cmc={self.enable_cmc} "
+            f"[TRACKER] {class_name} activo ({self.engine_name}): cmc={self.enable_cmc} "
             f"method={gmc_method} buffer={track_buffer} min_hits={track_min_hits} "
             f"reid={self.reid_enabled} lost_display={self.show_lost_tracks} "
             f"lost_prediction={self.lost_track_prediction}",
             flush=True,
         )
+        print(
+            f"[TRACKER] Motores: trackers={self.package_versions['trackers']} "
+            f"supervision={self.package_versions['supervision']} "
+            f"frame_rate={float(frame_rate):.1f} min_box_px={self.min_box_px:.1f}",
+            flush=True,
+        )
+        if dropped_kwargs:
+            print(
+                "[TRACKER] La version instalada no acepta estos parametros "
+                f"(se usan sus valores por defecto): {', '.join(dropped_kwargs)}",
+                flush=True,
+            )
+        if self.reid_enabled:
+            print(
+                "[TRACKER] Memoria de identidad activa: reduce el doble conteo cuando se "
+                "pierde un track, pero puede fusionar dos animales distintos y subcontar. "
+                "Comparar en campo con --no-reid.",
+                flush=True,
+            )
 
     def _event(self, name, **fields):
         quiet_events = {
@@ -1574,6 +1808,7 @@ class RoboflowBoTSORTBovineTracker:
             det for det in detections
             if float(det[4]) >= self.track_low_thresh
         ]
+        usable = filter_small_detections(usable, self.min_box_px)
         if not usable:
             try:
                 return self.sv.Detections.empty()
@@ -1596,10 +1831,12 @@ class RoboflowBoTSORTBovineTracker:
     def _count_confirmed_track(self, track_id):
         identity_id = self.track_to_identity.get(track_id, track_id)
         if identity_id in self.identity_counted_ids:
+            self.stats["count_rejected_already"] += 1
             self._event("COUNT_REJECTED_ALREADY_COUNTED", track_id=track_id, identity_id=identity_id)
             return
         self.identity_counted_ids.add(identity_id)
         self.total_count += 1
+        self.stats["counts_accepted"] += 1
         print(
             f"COUNT_ACCEPTED|track_id={track_id}|identity_id={identity_id}|"
             f"count={self.total_count}",
@@ -1765,12 +2002,17 @@ class RoboflowBoTSORTBovineTracker:
 
     def summary_fields(self):
         return {
+            "engine": self.engine_name,
+            "trackers_version": self.package_versions.get("trackers", "-"),
+            "supervision_version": self.package_versions.get("supervision", "-"),
             "tracks_created": self.stats["tracks_created"],
             "tracks_recovered": self.stats["tracks_recovered"],
             "tracks_removed": self.stats["tracks_removed"],
             "reid_matches": self.stats["reid_matches"],
             "reid_rejects": self.stats["reid_rejects"],
             "lost_display_frames": self.stats["lost_display_frames"],
+            "counts_accepted": self.stats["counts_accepted"],
+            "count_rejected_already": self.stats["count_rejected_already"],
             "unique_bovines": self.total_count,
         }
 
@@ -1793,16 +2035,20 @@ def create_tracker(
     lost_track_max_seconds,
     lost_track_prediction,
     verbose_tracking,
+    min_box_px=0.0,
+    allow_fallback=False,
 ):
+    tracker_name = str(tracker_name).lower().strip()
     if tracker_name == "none":
         print("[TRACKER] Modo legacy activado: conteo inmediato por track nuevo")
         return LegacyUniqueBovineTracker(
             max_missed=track_buffer,
             min_iou=track_min_iou,
             max_distance=track_max_distance,
+            min_box_px=min_box_px,
         )
 
-    if tracker_name == "botsort":
+    if tracker_name in ("botsort", "bytetrack", "ocsort"):
         try:
             return RoboflowBoTSORTBovineTracker(
                 track_buffer=track_buffer,
@@ -1820,11 +2066,19 @@ def create_tracker(
                 lost_track_max_seconds=lost_track_max_seconds,
                 lost_track_prediction=lost_track_prediction,
                 verbose_tracking=verbose_tracking,
+                min_box_px=min_box_px,
+                tracker_kind=tracker_name,
             )
         except Exception as exc:
+            if not allow_fallback:
+                raise RuntimeError(
+                    f"Tracker {tracker_name} no disponible; corrige la dependencia o "
+                    "selecciona --tracker simple / --allow-tracker-fallback explicitamente"
+                ) from exc
             print(
-                "[TRACKER] No se pudo activar BoT-SORT real "
-                f"({type(exc).__name__}: {exc}); usando tracker simple interno",
+                f"[TRACKER] No se pudo activar {tracker_name} real "
+                f"({type(exc).__name__}: {exc}); se usa el tracker interno "
+                "(sin GMC de libreria) para no detener el conteo",
                 flush=True,
             )
     else:
@@ -1840,6 +2094,7 @@ def create_tracker(
         match_thresh=match_thresh,
         gmc_method=gmc_method,
         verbose_tracking=verbose_tracking,
+        min_box_px=min_box_px,
     )
 
 
@@ -1864,66 +2119,67 @@ def capture_worker(
     playback_speed=1.0,
     video_mode="realtime",
     hw_decode=False,
+    capture_timeout=10.0,
 ):
-    cap, used = open_video_source(
-        source,
-        codec=codec,
-        latency=latency,
-        csi_sensor_id=csi_sensor_id,
-        csi_width=csi_width,
-        csi_height=csi_height,
-        csi_fps=csi_fps,
-        csi_flip=csi_flip,
-        hw_decode=hw_decode,
-    )
-
-    if not cap.isOpened():
-        print(f"[CAPTURA] No se pudo abrir la fuente: {source}")
-        if stop_reason is not None:
-            stop_reason["value"] = "capture_open_failed"
-        emit_worker_status("error", "capture_open_failed")
-        stop_event.set()
-        return
-
-    local_file = is_local_file_source(source)
-    pending_frame = None
-    if local_file and hw_decode and used != source:
-        ok, pending_frame = cap.read()
-        if not ok or pending_frame is None:
-            print("[CAPTURA] HW decode no entregó frames; usando cv2.VideoCapture fallback")
-            cap.release()
-            cap = cv2.VideoCapture(source)
-            used = source
-            if not cap.isOpened():
-                print(f"[CAPTURA] No se pudo abrir la fuente: {source}")
-                if stop_reason is not None:
-                    stop_reason["value"] = "capture_open_failed"
-                emit_worker_status("error", "capture_open_failed")
-                stop_event.set()
-                return
-            pending_frame = None
-
-    print("[CAPTURA] Fuente abierta correctamente")
-    print(f"[CAPTURA] Usando: {used}")
-    emit_worker_status("capture_ready", "source_opened")
-    source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-    source_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    update_perf_stats(source_fps=source_fps, source_frame_count=source_frame_count)
-
+    cap = None
     try:
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    except Exception:
-        pass
+        cap, used = open_video_source(
+            source,
+            codec=codec,
+            latency=latency,
+            csi_sensor_id=csi_sensor_id,
+            csi_width=csi_width,
+            csi_height=csi_height,
+            csi_fps=csi_fps,
+            csi_flip=csi_flip,
+            hw_decode=hw_decode,
+        )
 
-    low_latency = is_live_source(source) or (local_file and video_mode == "realtime")
-    sync_to_video_time = local_file and (realtime_video or video_mode == "realtime")
-    speed = max(float(playback_speed), 1e-6)
-    first_video_msec = None
-    first_wall_time = None
-    frame_index = 0
-    last_pos_msec = None
+        if not cap.isOpened():
+            print(f"[CAPTURA] No se pudo abrir la fuente: {source}")
+            request_stop(stop_event, stop_reason, "capture_open_failed")
+            emit_worker_status("error", "capture_open_failed")
+            stop_event.set()
+            return
 
-    try:
+        local_file = is_local_file_source(source)
+        pending_frame = None
+        if local_file and hw_decode and used != source:
+            ok, pending_frame = cap.read()
+            if not ok or pending_frame is None:
+                print("[CAPTURA] HW decode no entregó frames; usando cv2.VideoCapture fallback")
+                cap.release()
+                cap = cv2.VideoCapture(source)
+                used = source
+                if not cap.isOpened():
+                    print(f"[CAPTURA] No se pudo abrir la fuente: {source}")
+                    request_stop(stop_event, stop_reason, "capture_open_failed")
+                    emit_worker_status("error", "capture_open_failed")
+                    stop_event.set()
+                    return
+                pending_frame = None
+
+        print("[CAPTURA] Fuente abierta correctamente")
+        print(f"[CAPTURA] Usando: {used}")
+        emit_worker_status("capture_ready", "source_opened")
+        source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        source_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        update_perf_stats(source_fps=source_fps, source_frame_count=source_frame_count)
+
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        low_latency = is_live_source(source) or (local_file and video_mode == "realtime")
+        sync_to_video_time = local_file and (realtime_video or video_mode == "realtime")
+        speed = max(float(playback_speed), 1e-6)
+        first_video_msec = None
+        first_wall_time = None
+        frame_index = 0
+        last_pos_msec = None
+        last_frame_at = time.monotonic()
+
         while not stop_event.is_set():
             if pending_frame is not None:
                 ok, frame = True, pending_frame
@@ -1937,8 +2193,7 @@ def capture_worker(
                     cap = cv2.VideoCapture(source)
                     used = source
                     if not cap.isOpened():
-                        if stop_reason is not None:
-                            stop_reason["value"] = "capture_open_failed"
+                        request_stop(stop_event, stop_reason, "capture_open_failed")
                         emit_worker_status("error", "capture_open_failed")
                         stop_event.set()
                         break
@@ -1948,8 +2203,9 @@ def capture_worker(
                     frame_index = 0
                     continue
                 if local_file:
-                    if stop_reason is not None and stop_reason.get("value") == "finished":
-                        stop_reason["value"] = "eof"
+                    with STOP_REASON_LOCK:
+                        if stop_reason is not None and stop_reason.get("value") == "finished":
+                            stop_reason["value"] = "eof"
                     while not stop_event.is_set():
                         try:
                             frame_q.put(EOS_FRAME, timeout=0.2)
@@ -1962,9 +2218,14 @@ def capture_worker(
                                 except queue.Empty:
                                     pass
                     break
-                time.sleep(0.01)
+                if time.monotonic() - last_frame_at >= capture_timeout:
+                    request_stop(stop_event, stop_reason, "capture_timeout")
+                    emit_worker_status("error", "capture_timeout")
+                    break
+                stop_event.wait(0.05)
                 continue
 
+            last_frame_at = time.monotonic()
             update_perf_stats(frames_read=1)
             frame_index += 1
             pos_msec = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
@@ -2010,8 +2271,16 @@ def capture_worker(
                             pass
                     else:
                         continue
+    except Exception as exc:
+        request_stop(stop_event, stop_reason, "capture_error")
+        emit_worker_status("error", f"capture_error:{type(exc).__name__}:{exc}")
     finally:
-        cap.release()
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception as exc:
+                request_stop(stop_event, stop_reason, "capture_close_error")
+                print(f"[CAPTURA] Error liberando camara: {exc}", flush=True)
         print("[CAPTURA] Cerrado")
 
 
@@ -2040,6 +2309,7 @@ def infer_worker(
     lost_track_max_seconds,
     lost_track_prediction,
     verbose_tracking,
+    min_box_px,
     display_enabled,
     export_detections_path=None,
     save_detection_frames_dir=None,
@@ -2049,12 +2319,16 @@ def infer_worker(
     processing_width=0,
     processing_height=0,
     stop_reason=None,
+    input_layout="auto",
+    normalization="raw",
+    class_ids=None,
+    allow_tracker_fallback=False,
 ):
     detector = None
     tracker = None
     detection_exporter = None
     try:
-        detector = TRTDetector(engine_path)
+        detector = TRTDetector(engine_path, input_layout=input_layout, normalization=normalization)
         resolved_track_buffer = (
             track_max_missed if track_buffer is None else track_buffer
         )
@@ -2065,7 +2339,7 @@ def infer_worker(
             track_min_iou=track_min_iou,
             track_max_distance=track_max_distance,
             track_min_hits=track_min_hits,
-            track_high_thresh=track_high_thresh,
+            track_high_thresh=max(conf_th, track_high_thresh),
             track_low_thresh=track_low_thresh,
             match_thresh=match_thresh,
             gmc_method=gmc_method,
@@ -2076,6 +2350,16 @@ def infer_worker(
             lost_track_max_seconds=lost_track_max_seconds,
             lost_track_prediction=lost_track_prediction,
             verbose_tracking=verbose_tracking,
+            min_box_px=min_box_px,
+            allow_fallback=allow_tracker_fallback,
+        )
+        WORKER_METADATA.update(
+            tracker_requested=tracker_name,
+            tracker_effective=tracker.engine_name,
+            input_layout=detector.input_layout,
+            normalization=normalization,
+            class_ids=class_ids,
+            count_semantics="confirmed_tracking_identities",
         )
         if export_detections_path or save_detection_frames_dir:
             detection_exporter = DetectionExporter(
@@ -2100,6 +2384,7 @@ def infer_worker(
         inference_ms_sum = 0.0
         tracking_ms_sum = 0.0
         total_ms_sum = 0.0
+        frame_rate_warned = False
         processed_frames = 0
 
         while not stop_event.is_set():
@@ -2108,9 +2393,7 @@ def infer_worker(
             except queue.Empty:
                 continue
             if item is EOS_FRAME:
-                if stop_reason is not None and stop_reason.get("value") == "finished":
-                    stop_reason["value"] = "eof"
-                stop_event.set()
+                request_stop(stop_event, stop_reason, "eof")
                 break
             if isinstance(item, dict) and "frame" in item:
                 frame = item["frame"]
@@ -2135,9 +2418,14 @@ def infer_worker(
                     box_format=box_format,
                 )
                 detection_exporter.write(frame_number, timestamp_ms, frame, export_dets)
-            dets = decode_detections(outputs, frame.shape, conf_th=conf_th, box_format=box_format)
+            # Los scores bajos sirven para asociar oclusiones; no crean tracks.
+            association_conf = conf_th if tracker_name == "none" else min(conf_th, track_low_thresh)
+            dets = decode_detections(
+                outputs, frame.shape, conf_th=association_conf,
+                box_format=box_format, class_ids=class_ids,
+            )
 
-            count_visible = len(dets)
+            count_visible = sum(det[4] >= conf_th for det in dets)
             tracking_t0 = time.perf_counter()
             active_tracks, total_count = tracker.update(dets, frame=frame)
             tracking_ms = (time.perf_counter() - tracking_t0) * 1000.0
@@ -2159,6 +2447,25 @@ def infer_worker(
                 last_status_at = now
             if now - last_metric_at >= 5.0:
                 sample_count = max(metric_samples, 1)
+                # El buffer de tracks se mide en frames y la libreria lo escala
+                # por frame_rate/30. Si el pipeline procesa a otro ritmo, el
+                # buffer dura mas o menos segundos de lo previsto.
+                if (
+                    not frame_rate_warned
+                    and fps > 0.0
+                    and tracker_frame_rate
+                    and abs(fps - float(tracker_frame_rate))
+                    > 0.35 * float(tracker_frame_rate)
+                ):
+                    frame_rate_warned = True
+                    print(
+                        "TRACK_WARN|frame_rate_mismatch|"
+                        f"pipeline_fps={fps:.2f}|"
+                        f"tracker_frame_rate={float(tracker_frame_rate):.1f}|"
+                        "detail=ajusta --tracker-frame-rate al FPS real de "
+                        "procesamiento para que el buffer dure lo previsto",
+                        flush=True,
+                    )
                 print(
                     f"TRACK_METRIC|tracker={tracker_name}|active={visible_tracks}|"
                     f"occluded={occluded_tracks}|"
@@ -2239,21 +2546,23 @@ def infer_worker(
 
     except Exception as e:
         print(f"[INFERENCIA] Error: {e}")
-        if stop_reason is not None:
-            stop_reason["value"] = "inference_error"
+        request_stop(stop_event, stop_reason, "inference_error")
         emit_worker_status("error", "inference_error")
         stop_event.set()
     finally:
-        if detection_exporter is not None:
-            detection_exporter.close()
-        if tracker is not None and hasattr(tracker, "summary_fields"):
-            fields = tracker.summary_fields()
-            print(
-                "TRACK_FINAL|" + "|".join(f"{key}={value}" for key, value in fields.items()),
-                flush=True,
-            )
-        if detector is not None:
-            detector.close()
+        try:
+            if tracker is not None and hasattr(tracker, "summary_fields"):
+                fields = tracker.summary_fields()
+                print("TRACK_FINAL|" + "|".join(f"{key}={value}" for key, value in fields.items()), flush=True)
+        except Exception as exc:
+            print(f"[TRACKER] Error en resumen: {exc}", flush=True)
+        for resource in (detection_exporter, detector):
+            if resource is not None:
+                try:
+                    resource.close()
+                except Exception as exc:
+                    request_stop(stop_event, stop_reason, "resource_close_error")
+                    print(f"[INFERENCIA] Error liberando recurso: {exc}", flush=True)
         print("[INFERENCIA] Cerrado")
 
 
@@ -2308,6 +2617,75 @@ def display_worker(
 # ============================================================
 # Main
 # ============================================================
+def guarded_worker(target, args, stop_event, stop_reason):
+    try:
+        target(*args)
+    except Exception as exc:
+        request_stop(stop_event, stop_reason, "worker_error")
+        emit_worker_status("error", f"{target.__name__}:{type(exc).__name__}:{exc}")
+
+
+def worker_thread(target, args, stop_event, stop_reason, name):
+    return threading.Thread(
+        target=guarded_worker, args=(target, args, stop_event, stop_reason),
+        name=name, daemon=True,
+    )
+
+
+def acquire_worker_lock():
+    """Impide dos workers del usuario incluso tras reiniciar el receptor."""
+    path = os.path.join(tempfile.gettempdir(), f"bovisense-worker-{os.getuid()}.lock")
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def supervise_workers(threads, stop_event, stop_reason, local_file, capture_timeout,
+                      inference_timeout, max_duration, shutdown_timeout):
+    """Vigila progreso y espera un único plazo de cierre para todos los hilos."""
+    started = time.monotonic()
+    last_capture = last_inference = started
+    read_before = processed_before = 0
+    while not stop_event.wait(0.1):
+        now = time.monotonic()
+        read = current_perf_stats()["frames_read"]
+        processed = current_count_stats()["frames_processed"]
+        alive = [thread.is_alive() for thread in threads]
+        # Un consumidor puede publicar EOF mientras se toman estas lecturas.
+        # Si termino normalmente, su stop_event precede a su salida.
+        if stop_event.is_set():
+            break
+        if read != read_before:
+            read_before, last_capture = read, now
+        if processed != processed_before:
+            processed_before, last_inference = processed, now
+        if max_duration > 0 and now - started >= max_duration:
+            request_stop(stop_event, stop_reason, "session_timeout")
+        elif not alive[1]:
+            request_stop(stop_event, stop_reason, "inference_worker_exited")
+        elif not alive[0] and stop_reason.get("value") != "eof":
+            request_stop(stop_event, stop_reason, "capture_worker_exited")
+        elif not local_file and now - last_capture >= capture_timeout:
+            request_stop(stop_event, stop_reason, "capture_timeout")
+        elif now - last_inference >= inference_timeout:
+            request_stop(stop_event, stop_reason, "inference_timeout")
+        elif len(threads) > 2 and not alive[2]:
+            request_stop(stop_event, stop_reason, "display_worker_exited")
+
+    deadline = time.monotonic() + shutdown_timeout
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    stuck = [thread.name for thread in threads if thread.is_alive()]
+    if stuck:
+        request_stop(stop_event, stop_reason, "shutdown_timeout")
+        emit_worker_status("error", "threads_not_stopped:" + ",".join(stuck))
+    return stuck
+
+
 def main():
     parser = argparse.ArgumentParser(description="Detección bovina en tiempo real con TensorRT")
     parser.add_argument("--engine", required=True, help="Ruta al engine .engine")
@@ -2338,11 +2716,42 @@ def main():
     parser.add_argument("--hw-decode", action="store_true", help="Intenta decodificar archivos H264/H265 con GStreamer/NVDEC y usa fallback automático.")
     parser.add_argument("--conf", type=float, default=0.45, help="Umbral de confianza")
     parser.add_argument("--box-format", default="yxyx", choices=["yxyx", "xyxy"], help="Formato de cajas")
+    parser.add_argument("--input-layout", default="auto", choices=["auto", "nhwc", "nchw"])
+    parser.add_argument("--normalization", default="raw", choices=["raw", "zero_one", "minus_one_one"], help="Debe coincidir con el entrenamiento/exportacion; raw conserva RGB 0..255.")
+    parser.add_argument("--class-id", type=int, action="append", help="ID bovino del label map; repetible. Sin especificar se asume engine exclusivo de bovinos.")
+    parser.add_argument("--allow-tracker-fallback", action="store_true", help="Permite degradar al tracker interno si falla la dependencia externa.")
+    parser.add_argument("--capture-timeout", type=float, default=10.0)
+    parser.add_argument("--inference-timeout", type=float, default=60.0, help="Incluye carga inicial del motor y tracker.")
+    parser.add_argument("--shutdown-timeout", type=float, default=5.0)
+    parser.add_argument("--max-duration", type=float, default=600.0, help="Limite independiente del receptor; 0 sin limite para videos de evaluacion.")
     parser.add_argument(
         "--tracker",
         default="botsort",
-        choices=["simple", "botsort", "none"],
-        help="Tracker: botsort usa Roboflow Trackers si esta instalado; simple usa persistencia interna; none usa comportamiento legacy.",
+        choices=["simple", "botsort", "bytetrack", "ocsort", "none"],
+        help=(
+            "Tracker posterior a la deteccion: botsort (con GMC, recomendado "
+            "para dron), bytetrack y ocsort (comparacion, sin GMC), simple "
+            "(persistencia interna) o none (comportamiento legacy sin tracking)."
+        ),
+    )
+    parser.add_argument(
+        "--tracker-frame-rate",
+        type=float,
+        default=None,
+        help=(
+            "FPS que veras el tracker; por defecto usa --csi-fps. Ponlo al FPS "
+            "real de procesamiento: el buffer de tracks se escala con este valor."
+        ),
+    )
+    parser.add_argument(
+        "--min-box-px",
+        type=float,
+        default=0.0,
+        help=(
+            "Descarta detecciones cuyo lado menor en pixeles sea menor a este "
+            "valor (0 lo desactiva). Reduce ruido lejano: en tomas desde 20-30 m "
+            "un valor de 10-15 suele ser razonable."
+        ),
     )
     parser.add_argument(
         "--track-max-missed",
@@ -2395,7 +2804,7 @@ def main():
     parser.add_argument(
         "--gmc",
         default="orb",
-        choices=["orb", "none"],
+        choices=["orb", "ecc", "sparseOptFlow", "none"],
         help="Compensación de movimiento global para cámara móvil",
     )
     parser.add_argument(
@@ -2426,6 +2835,14 @@ def main():
     )
     parser.add_argument("--verbose-tracking", action="store_true", help="Imprime eventos TRACK_* y REID_REJECT detallados.")
     args = parser.parse_args()
+    if not (0 <= args.track_low_thresh <= args.track_high_thresh <= 1 and 0 <= args.conf <= 1):
+        parser.error("Umbrales invalidos: 0 <= track-low <= track-high <= 1 y conf entre 0 y 1")
+    if any(not np.isfinite(v) or v <= 0 for v in (args.capture_timeout, args.inference_timeout, args.shutdown_timeout, args.playback_speed)):
+        parser.error("Timeouts y playback-speed deben ser finitos y positivos")
+    if not np.isfinite(args.max_duration) or args.max_duration < 0:
+        parser.error("max-duration debe ser finito y no negativo")
+    if min(args.csi_width, args.csi_height, args.csi_fps, args.track_min_hits, args.track_buffer) <= 0:
+        parser.error("Dimensiones, FPS, track-min-hits y track-buffer deben ser positivos")
 
     reset_runtime_stats()
     effective_video_mode = "realtime" if args.realtime_video else args.video_mode
@@ -2437,14 +2854,13 @@ def main():
     stop_reason = {"value": "finished"}
 
     def handle_sigint(sig, frame):
-        stop_reason["value"] = "signal"
-        stop_event.set()
+        request_stop(stop_event, stop_reason, "signal")
 
     signal.signal(signal.SIGINT, handle_sigint)
     signal.signal(signal.SIGTERM, handle_sigint)
     emit_worker_status("starting", "threads_starting")
 
-    th_cap = threading.Thread(
+    th_cap = worker_thread(
         target=capture_worker,
         args=(
             args.source,
@@ -2464,9 +2880,12 @@ def main():
             args.playback_speed,
             effective_video_mode,
             args.hw_decode,
+            args.capture_timeout,
         ),
+        name="capture",
+        stop_event=stop_event, stop_reason=stop_reason,
     )
-    th_inf = threading.Thread(
+    th_inf = worker_thread(
         target=infer_worker,
         args=(
             args.engine,
@@ -2485,7 +2904,7 @@ def main():
             args.track_buffer,
             args.match_thresh,
             args.gmc,
-            args.csi_fps,
+            args.tracker_frame_rate or args.csi_fps,
             args.reid,
             args.reid_max_seconds,
             args.reid_threshold,
@@ -2493,6 +2912,7 @@ def main():
             args.lost_track_max_seconds,
             args.lost_track_prediction,
             args.verbose_tracking,
+            args.min_box_px,
             not args.no_display,
             args.export_detections,
             args.save_detection_frames,
@@ -2502,31 +2922,61 @@ def main():
             args.processing_width,
             args.processing_height,
             stop_reason,
+            args.input_layout,
+            args.normalization,
+            args.class_id,
+            args.allow_tracker_fallback,
         ),
+        name="inference",
+        stop_event=stop_event, stop_reason=stop_reason,
     )
     th_vis = None
     if not args.no_display:
-        th_vis = threading.Thread(
+        th_vis = worker_thread(
             target=display_worker,
             args=(vis_q, stop_event, "Bovinos - Jetson Orin Nano", args.display_width, args.display_height),
+            name="display",
+            stop_event=stop_event, stop_reason=stop_reason,
         )
 
-    th_cap.start()
-    th_inf.start()
-    if th_vis is not None:
-        th_vis.start()
-
-    while not stop_event.is_set():
-        time.sleep(0.2)
-
-    th_cap.join(timeout=5.0)
-    th_inf.join(timeout=5.0)
-    if th_vis is not None:
-        th_vis.join(timeout=5.0)
-
-    emit_worker_result(stop_reason["value"])
-    print("[MAIN] Finalizado")
+    threads = [th_cap, th_inf] + ([th_vis] if th_vis is not None else [])
+    try:
+        worker_lock = acquire_worker_lock()
+    except OSError as exc:
+        print(f"[MAIN] No se pudo adquirir propiedad del worker: {exc}", flush=True)
+        emit_worker_result("worker_lock_failed")
+        return 1
+    started_threads = []
+    try:
+        for thread in threads:
+            thread.start()
+            started_threads.append(thread)
+    except Exception as exc:
+        request_stop(stop_event, stop_reason, "thread_start_failed")
+        emit_worker_status("error", str(exc))
+    try:
+        try:
+            stuck = supervise_workers(
+                started_threads, stop_event, stop_reason, local_file,
+                args.capture_timeout, args.inference_timeout, args.max_duration, args.shutdown_timeout,
+            )
+        except Exception as exc:
+            request_stop(stop_event, stop_reason, "supervisor_error")
+            print(f"[MAIN] Error de supervision: {exc}", flush=True)
+            stuck = supervise_workers(
+                started_threads, stop_event, stop_reason, local_file,
+                args.capture_timeout, args.inference_timeout, args.max_duration, args.shutdown_timeout,
+            )
+        result = emit_worker_result(stop_reason["value"])
+        print("[MAIN] Finalizado", flush=True)
+        if stuck:
+            # Un hilo nativo bloqueado no se puede cancelar en Python. Terminar el
+            # proceso libera sus handles; nunca liberar CUDA desde otro hilo.
+            os._exit(1)
+    finally:
+        os.close(worker_lock)
+    return 0 if result["status"] == "finished" else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

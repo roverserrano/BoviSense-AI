@@ -2,17 +2,18 @@
 # -*- coding: utf-8 -*-
 
 import time
-import socket
 import subprocess
 import argparse
 import fcntl
 import json
 import os
 import signal
+import tempfile
+import uuid
 from pathlib import Path
 import spidev
 
-from secure_protocol import STATES, SecureProtocol
+from secure_protocol import HEX_ID, STATES, SecureProtocol
 
 # =========================================================
 # CONFIGURACIÓN
@@ -20,7 +21,13 @@ from secure_protocol import STATES, SecureProtocol
 SPI_BUS = 0
 SPI_DEV = 0
 SPI_SPEED_HZ = 10000
-SPI_LOCK_DIRECTORY = "/run"
+# El servicio se ejecuta como el usuario no privilegiado `cow`: /run no es
+# escribible para ese usuario. Mantener el bloqueo junto al estado privado evita
+# depender de un archivo creado previamente por root y sobrevive a reinicios.
+SPI_LOCK_DIRECTORY = os.environ.get(
+    "BOVISENSE_SPI_LOCK_DIRECTORY",
+    str(Path.home() / ".local" / "state" / "bovisense"),
+)
 
 # Cableado confirmado (Jetson Orin Nano <-> SX1278), numeracion fisica:
 #   pin 17 (3.3 V) -> VCC y RST   (RST puenteado a 3.3 V de forma permanente)
@@ -61,6 +68,7 @@ COUNT_DISPLAY_HEIGHT = 540
 COUNT_LOG_PATH = "/home/cow/Documents/Script/run_bovino_lora.log"
 COUNT_MAX_DURATION_SEC = 600
 COUNT_STOP_TIMEOUT_SEC = 8
+COUNT_WORKER_OPTIONS = []
 
 # =========================================================
 # REGISTROS SX127x
@@ -251,6 +259,7 @@ class SX1278Receiver:
     def acquire_spi_lock(self):
         lock_path = f"{SPI_LOCK_DIRECTORY}/bovisense-spidev{SPI_BUS}.{SPI_DEV}.lock"
         try:
+            os.makedirs(SPI_LOCK_DIRECTORY, mode=0o700, exist_ok=True)
             lock_fd = os.open(
                 lock_path,
                 os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -563,116 +572,14 @@ class SX1278Receiver:
                 self.spi_lock_fd = None
 
 
-def clean_field(value, fallback="No disponible", max_length=32):
-    text = str(value).strip()
-    if not text:
-        text = fallback
-    text = text.replace("|", "/").replace("\n", " ").replace("\r", " ")
-    return text[:max_length]
-
-
-def read_power_mode():
-    try:
-        result = subprocess.run(
-            ["nvpmodel", "-q"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        output = result.stdout + result.stderr
-        for line in output.splitlines():
-            if "NV Power Mode" in line or "Power Mode" in line:
-                return clean_field(line.split(":", 1)[-1], max_length=12)
-    except Exception as exc:
-        return clean_field(f"error {exc}", max_length=28)
-
-    return "No disponible"
-
-
-def read_uptime():
-    try:
-        with open("/proc/uptime", "r", encoding="utf-8") as file:
-            seconds = int(float(file.read().split()[0]))
-        days, rem = divmod(seconds, 86400)
-        hours, rem = divmod(rem, 3600)
-        minutes, _ = divmod(rem, 60)
-        if days:
-            return f"{days}d{hours}h"
-        return f"{hours}h{minutes}m"
-    except Exception:
-        return "No disponible"
-
-
-def read_cpu_temp():
-    try:
-        thermal_root = "/sys/class/thermal"
-        candidates = []
-        for index in range(20):
-            base = f"{thermal_root}/thermal_zone{index}"
-            try:
-                with open(f"{base}/type", "r", encoding="utf-8") as file:
-                    zone_type = file.read().strip().lower()
-                with open(f"{base}/temp", "r", encoding="utf-8") as file:
-                    temp_c = int(file.read().strip()) / 1000.0
-                candidates.append((zone_type, temp_c))
-            except Exception:
-                continue
-
-        for zone_type, temp_c in candidates:
-            if "cpu" in zone_type or "thermal" in zone_type:
-                return f"{temp_c:.1f}C"
-        if candidates:
-            return f"{candidates[0][1]:.1f}C"
-    except Exception:
-        pass
-
-    return "No disponible"
-
-
-def read_memory():
-    try:
-        values = {}
-        with open("/proc/meminfo", "r", encoding="utf-8") as file:
-            for line in file:
-                key, raw_value = line.split(":", 1)
-                values[key] = int(raw_value.strip().split()[0])
-
-        total_mb = values["MemTotal"] // 1024
-        available_mb = values["MemAvailable"] // 1024
-        used_mb = total_mb - available_mb
-        return f"{used_mb}/{total_mb}"
-    except Exception:
-        return "No disponible"
-
-
-def read_load_average():
-    try:
-        with open("/proc/loadavg", "r", encoding="utf-8") as file:
-            return file.read().split()[0]
-    except Exception:
-        return "No disponible"
-
-
-def build_jetson_status_response(msg_id):
-    fields = {
-        "h": clean_field(socket.gethostname(), max_length=20),
-        "p": read_power_mode(),
-        "u": read_uptime(),
-        "t": read_cpu_temp(),
-        "m": read_memory(),
-        "l": read_load_average(),
-    }
-    status = "|".join(f"{key}={value}" for key, value in fields.items())
-    return f"RESP|{msg_id}|JS|{status}"
-
-
 class CountSessionController:
     def __init__(self):
         self.session = None
         self.last_result = None
         self.process = None
         self.log_file = None
+        self.pending_results = {}
+        self.result_lookup_failed = False
 
     def validate_runtime(self):
         required_paths = [
@@ -714,6 +621,14 @@ class CountSessionController:
                 session=self.session_id(),
             )
 
+        if self.pending_results:
+            return self.response_fields("ERROR", detail="result_persistence_failed", count=None)
+        if session_id and (self.result_matches_requested_session(session_id) or self.recover_stored_result(session_id)):
+            # Un nuevo request-id no permite ejecutar de nuevo la misma sesion.
+            return self.result_response(status="RESULT")
+        if self.result_lookup_failed:
+            return self.response_fields("ERROR", detail="result_lookup_failed", count=None)
+
         runtime_error = self.validate_runtime()
         if runtime_error is not None:
             self.log(f"INICIARCONTEO error: {runtime_error}")
@@ -727,8 +642,6 @@ class CountSessionController:
 
         session_id = session_id or self.new_session_id()
         now = time.time()
-        status_file = f"/tmp/bovisense_count_{session_id}_status.json"
-        result_file = f"/tmp/bovisense_count_{session_id}_result.json"
         self.session = {
             "id": session_id,
             "status": "RUNNING",
@@ -738,12 +651,15 @@ class CountSessionController:
             "count": None,
             "reason": "",
             "detail": "starting_worker",
-            "status_file": status_file,
-            "result_file": result_file,
+            "started_monotonic": time.monotonic(),
             "log_offset": 0,
         }
 
         try:
+            hook_dir = Path(tempfile.mkdtemp(prefix="bovisense-count-"))
+            status_file = str(hook_dir / "status.json")
+            result_file = str(hook_dir / "result.json")
+            self.session.update(status_file=status_file, result_file=result_file)
             command = self.build_shell_command()
             log_path = Path(COUNT_LOG_PATH)
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -791,8 +707,10 @@ class CountSessionController:
     def stop(self, reason="stopped_by_app", requested_session=None):
         self.sync_worker_state(skip_timeout=True)
 
-        if self.session is None:
-            if self.result_matches_requested_session(requested_session):
+        if self.session is None or (not self.is_worker_alive() and not self.matches_requested_session(requested_session)):
+            if self.result_matches_requested_session(
+                requested_session
+            ) or self.recover_stored_result(requested_session):
                 return self.result_response(status="STOPPED")
 
             # Sin sesion en memoria no hay conflicto que resolver: el equipo
@@ -820,7 +738,7 @@ class CountSessionController:
         if not self.is_worker_alive():
             self.log("DETENERCONTEO sin worker activo")
 
-            if self.result_matches_requested_session(requested_session):
+            if self.result_matches_requested_session(requested_session) or self.recover_stored_result(requested_session or self.session_id()):
                 return self.result_response(status="STOPPED")
 
             return self.response_fields(
@@ -832,19 +750,21 @@ class CountSessionController:
             )
 
         session_id = self.session_id()
-        self.session["status"] = "STOPPING"
+        if self.session.get("status") != "ERROR":
+            self.session["status"] = "STOPPING"
         self.session["detail"] = reason
         self.log(f"Sesion {session_id} STOPPING reason={reason}")
 
         killed = False
         try:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-            self.process.wait(timeout=COUNT_STOP_TIMEOUT_SEC)
-        except subprocess.TimeoutExpired:
-            killed = True
-            self.log(f"Sesion {session_id} no termino con SIGTERM; usando SIGKILL")
-            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
-            self.process.wait(timeout=3)
+            try:
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                self.process.wait(timeout=COUNT_STOP_TIMEOUT_SEC)
+            except subprocess.TimeoutExpired:
+                killed = True
+                self.log(f"Sesion {session_id} no termino con SIGTERM; usando SIGKILL")
+                os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                self.process.wait(timeout=3)
         except ProcessLookupError:
             pass
         except Exception as exc:
@@ -852,16 +772,60 @@ class CountSessionController:
             self.finish_session("stop_error", status="ERROR", detail=str(exc))
             return self.response_fields("ERROR", detail=str(exc), session=session_id)
 
-        finish_reason = "killed_after_timeout" if killed else reason
-        self.finish_session(finish_reason, status="STOPPED", detail=finish_reason)
+        if killed:
+            # Terminacion forzada: el worker no confirmo ningun final. El
+            # ultimo acumulado no es confiable y no debe viajar como STOPPED,
+            # porque la app podria guardarlo como resultado final valido.
+            self.session["count"] = None
+            self.finish_session(
+                "killed_after_timeout",
+                status="ERROR",
+                detail="forced_termination",
+            )
+            return self.result_response(status="ERROR")
+
+        self.read_worker_hooks()
+        if self.is_worker_alive():
+            self.finish_session("stop_incomplete", status="ERROR")
+        elif reason in ("timeout", "controller_shutdown"):
+            self.finish_session(reason, status="ERROR", detail=reason)
+        else:
+            self.sync_worker_state(skip_timeout=True)
         return self.result_response(status="STOPPED")
 
     def status(self, requested_session=None):
         self.sync_worker_state()
 
-        if self.session is None and not self.result_matches_requested_session(
-            requested_session
-        ):
+        if requested_session is None:
+            self.result_lookup_failed = False
+            # H: disponibilidad del equipo, nunca un resultado de sesion. Antes
+            # respondia el ultimo STOPPED con su conteo (y R1 con sesion '-'),
+            # trama que el backend rechaza porque un final necesita sesion y
+            # fecha de cierre. Tampoco se filtra el conteo en curso a quien
+            # solo consulta el estado.
+            if self.session is None:
+                return self.idle_fields()
+            if self.is_worker_alive():
+                return self.response_fields(
+                    "RUNNING",
+                    detail=self.session.get("detail", ""),
+                    session=self.session_id(),
+                    count=None,
+                )
+            return self.response_fields(
+                "READY",
+                detail="available",
+                session="none",
+                alive=False,
+                count=None,
+            )
+
+        # Q: estado de una sesion concreta (el backend ya verifico propiedad).
+        if self.session is None or (not self.is_worker_alive() and not self.matches_requested_session(requested_session)):
+            if self.result_matches_requested_session(
+                requested_session
+            ) or self.recover_stored_result(requested_session):
+                return self.result_response(status="STOPPED")
             # El equipo no tiene sesion ni resultado de lo solicitado: esta
             # disponible. Devolver ERROR haria parecer una falla del hardware.
             return self.idle_fields()
@@ -874,20 +838,31 @@ class CountSessionController:
                 alive=self.is_worker_alive(),
                 count=None,
             )
-        if self.session is None:
-            return self.idle_fields()
-
+        if self.is_worker_alive():
+            # El conteo en curso pertenece a esta sesion: se puede mostrar.
+            return self.response_fields(
+                self.session["status"],
+                detail=self.session.get("detail", ""),
+                session=self.session_id(),
+            )
+        if self.result_matches_requested_session(requested_session) or self.recover_stored_result(requested_session or self.session_id()):
+            # Finalizado: se responde con la fecha de cierre original, no con
+            # una fabricada al momento de responder.
+            return self.result_response(status="STOPPED")
         return self.response_fields(
-            self.session["status"],
-            detail=self.session.get("detail", ""),
+            "ERROR",
+            detail="result_not_available_yet",
             session=self.session_id(),
+            count=None,
         )
 
     def result(self, requested_session=None):
         self.sync_worker_state()
 
-        if self.session is None:
-            if self.result_matches_requested_session(requested_session):
+        if self.session is None or (not self.is_worker_alive() and not self.matches_requested_session(requested_session)):
+            if self.result_matches_requested_session(
+                requested_session
+            ) or self.recover_stored_result(requested_session):
                 return self.result_response(status="RESULT")
             return self.idle_fields()
 
@@ -905,15 +880,18 @@ class CountSessionController:
                 detail="result_not_available_yet",
                 session=self.session_id(),
             )
-        if self.result_matches_requested_session(requested_session):
+        if self.result_matches_requested_session(requested_session) or self.recover_stored_result(requested_session or self.session_id()):
             return self.result_response(status="RESULT")
         return self.response_fields(
-            self.session["status"],
+            "ERROR",
             detail="result_not_available_yet",
             session=self.session_id(),
+            count=None,
         )
 
     def sync_worker_state(self, skip_timeout=False):
+        for result in list(self.pending_results.values()):
+            self.persist_result(result)
         if self.session is None:
             return
 
@@ -937,11 +915,20 @@ class CountSessionController:
         if exit_code is None:
             return
 
-        if self.session["status"] in ("RUNNING", "STOPPING"):
-            status = "STOPPED" if exit_code == 0 else "ERROR"
-            reason = "worker_exited" if exit_code == 0 else "worker_exited_unexpectedly"
-            detail = f"{reason}:code={exit_code}"
-            self.finish_session(reason, status=status, detail=detail)
+        if not self.session.get("end_time"):
+            # Leer una ultima vez DESPUES del exit evita perder el JSON de cierre.
+            self.read_worker_hooks()
+            result = self.session.get("worker_result")
+            if exit_code != 0:
+                reason = (result or {}).get("reason") or "worker_exited_unexpectedly"
+                self.finish_session(reason, status="ERROR", detail=f"exit_code={exit_code}")
+            elif self.session.get("worker_error"):
+                self.finish_session(self.session["worker_error"], status="ERROR")
+            elif result:
+                self.session["count"] = result.get("count")
+                self.finish_session(result["reason"], status=result["status"])
+            else:
+                self.finish_session("missing_worker_result", status="ERROR")
 
     def read_worker_hooks(self):
         if self.session is None:
@@ -962,8 +949,12 @@ class CountSessionController:
             self.session["detail"] = f"invalid_worker_json:{exc}"
             return
 
-        count = data.get("count")
-        if count is not None:
+        if not isinstance(data, dict) or data.get("session") != self.session["id"]:
+            self.session["detail"] = "worker_session_mismatch"
+            return
+
+        count = self.valid_count(data.get("count"))
+        if count is not None and not self.session.get("end_time"):
             self.session["count"] = count
         detail = data.get("detail") or data.get("status")
         if detail:
@@ -971,7 +962,12 @@ class CountSessionController:
         if final:
             reason = data.get("reason") or "worker_result"
             status = self.worker_final_status(data.get("status"), reason)
-            self.finish_session(reason, status=status, detail=str(reason))
+            frames = data.get("frames_processed")
+            if status != "ERROR" and (type(frames) is not int or frames <= 0 or count is None):
+                status, reason, count = "ERROR", "invalid_worker_result", None
+            self.session["worker_result"] = {"status": status, "reason": str(reason), "count": count}
+        elif data.get("status") == "error":
+            self.session["worker_error"] = str(data.get("detail") or "worker_error")
 
     def read_worker_log(self):
         if self.session is None:
@@ -996,12 +992,15 @@ class CountSessionController:
                     self.session["count"] = fields["count"]
                     self.session["detail"] = "count_update"
             elif line.startswith("COUNT_FINAL|"):
+                if self.session.get("worker_result"):
+                    continue  # JSON validado es la fuente principal.
                 fields = self.parse_pipe_fields(line)
-                if "count" in fields:
-                    self.session["count"] = fields["count"]
+                count = self.valid_count(fields.get("count"))
                 reason = fields.get("reason", "worker_final")
-                status = self.worker_final_status(None, reason)
-                self.finish_session(reason, status=status, detail=reason)
+                status = self.worker_final_status(fields.get("status"), reason)
+                if status != "ERROR" and (not str(fields.get("frames", "")).isdigit() or int(fields["frames"]) <= 0 or count is None):
+                    status, reason, count = "ERROR", "invalid_worker_result", None
+                self.session["worker_result"] = {"status": status, "reason": reason, "count": count}
             elif line.startswith("WORKER_STATUS|"):
                 fields = self.parse_pipe_fields(line)
                 if "status" in fields:
@@ -1010,7 +1009,13 @@ class CountSessionController:
     def finish_session(self, reason, status="STOPPED", detail=""):
         if self.session is None:
             return
-        self.read_worker_hooks_without_finishing()
+        if self.session.get("end_time"):
+            return  # Cierre idempotente: conservar la fecha y el resultado originales.
+        if self.session.get("status") == "ERROR":
+            status = "ERROR"
+            reason = self.session.get("reason") or reason
+        if status == "ERROR":
+            self.session["count"] = None
         self.session["status"] = status
         self.session["end_time"] = time.time()
         self.session["reason"] = reason
@@ -1025,6 +1030,7 @@ class CountSessionController:
             count=self.session.get("count"),
             completed=int(self.session["end_time"]),
         )
+        self.persist_result()
         self.log(
             f"Sesion {self.session['id']} finalizada status={status} "
             f"reason={reason} elapsed={self.last_result['elapsed']}s "
@@ -1032,50 +1038,92 @@ class CountSessionController:
         )
         self.close_log_file()
 
-    def read_worker_hooks_without_finishing(self):
-        if self.session is None:
-            return
-        self.read_worker_json(self.session.get("status_file"), final=False)
-        self.read_worker_json(self.session.get("result_file"), final=False)
-        self.read_worker_log_updates_only()
+    def persist_result(self, result=None):
+        """Guarda el resultado final en SQLite antes de responder.
 
-    def read_worker_log_updates_only(self):
-        if self.session is None:
-            return
-        log_path = Path(COUNT_LOG_PATH)
-        if not log_path.exists():
-            return
+        Asi sobrevive un reinicio del receptor y RESULTADOCONTEO puede
+        recuperarlo despues con su fecha original de cierre. La tabla
+        `results` ya existia, pero no tenia llamadas operativas.
+        """
+        result = self.last_result if result is None else result
+        if result is None:
+            return False
+        session = str(result.get("session", ""))
+        if not HEX_ID.fullmatch(session):
+            return False
         try:
-            offset = int(self.session.get("log_offset", 0))
-            with open(log_path, "r", encoding="utf-8", errors="replace") as file:
-                file.seek(offset)
-                lines = file.readlines()
-                self.session["log_offset"] = file.tell()
-        except Exception:
-            return
-        for line in lines:
-            if (
-                line.startswith("COUNT_UPDATE|")
-                or line.startswith("COUNT_FINAL|")
-                or line.startswith("WORKER_STATUS|")
-            ):
-                fields = self.parse_pipe_fields(line.strip())
-                if "count" in fields:
-                    self.session["count"] = fields["count"]
+            if secure_protocol is None:
+                raise RuntimeError("protocolo persistente no configurado")
+            secure_protocol.save_result(result)
+            result["persisted"] = True
+            self.pending_results.pop(session, None)
+            self.log(
+                f"Resultado persistido session={session} "
+                f"status={result['status']}"
+            )
+            return True
+        except Exception as exc:
+            result["persisted"] = False
+            self.pending_results[session] = result
+            self.log(f"No se pudo persistir el resultado: {exc}")
+            return False
+
+    def recover_stored_result(self, requested_session):
+        """Recupera de SQLite el resultado de una sesion perdida de memoria.
+
+        Un reinicio del receptor borra `session`/`last_result`; sin esto, R/T
+        respondian IDLE y el resultado firmado quedaba inaccesible.
+        """
+        self.result_lookup_failed = False
+        if self.is_worker_alive():
+            return False
+        if not requested_session or requested_session == "-":
+            return False
+        if secure_protocol is None:
+            return False
+        if requested_session in self.pending_results:
+            self.last_result = self.pending_results[requested_session]
+            return True
+        try:
+            stored = secure_protocol.result(requested_session)
+        except Exception as exc:
+            self.result_lookup_failed = True
+            self.log(f"No se pudo leer el resultado persistido: {exc}")
+            return False
+        if not stored:
+            return False
+        self.last_result = {
+            "session": requested_session,
+            "status": str(stored.get("status") or "ERROR").upper(),
+            "reason": "persisted_result",
+            "detail": "persisted_result",
+            "pid": "none",
+            "elapsed": 0,
+            "count": stored.get("count"),
+            "completed": stored.get("completed") or 0,
+            "persisted": True,
+        }
+        self.log(
+            f"Sesion {requested_session} recuperada de SQLite "
+            f"status={self.last_result['status']}"
+        )
+        return True
 
     @staticmethod
     def worker_final_status(worker_status, reason):
         status_text = str(worker_status or "").strip().lower()
         reason_text = str(reason or "").strip().lower()
-        error_reasons = {
-            "capture_open_failed",
-            "inference_error",
-            "runtime_validation_failed",
-            "launch_failed",
-        }
-        if status_text == "error" or reason_text in error_reasons:
+        if status_text == "error" or reason_text not in {"finished", "eof", "signal", "user_stop"}:
             return "ERROR"
         return "STOPPED"
+
+    @staticmethod
+    def valid_count(value):
+        if type(value) is int and value >= 0:
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return None
 
     def build_shell_command(self):
         args = [
@@ -1095,7 +1143,10 @@ class CountSessionController:
             str(COUNT_CSI_FPS),
             "--csi-flip",
             str(COUNT_CSI_FLIP),
+            "--max-duration", str(COUNT_MAX_DURATION_SEC),
+            "--shutdown-timeout", str(max(0.1, COUNT_STOP_TIMEOUT_SEC - 2)),
         ]
+        args.extend(COUNT_WORKER_OPTIONS)
         if COUNT_NO_DISPLAY:
             args.append("--no-display")
         else:
@@ -1115,6 +1166,8 @@ class CountSessionController:
     ):
         active_alive = self.is_worker_alive() if alive is None else alive
         current = self.current_count() if count is _NO_COUNT else count
+        if status == "ERROR":
+            current = None
         fields = {
             "status": status,
             "session": session or self.session_id(),
@@ -1133,8 +1186,8 @@ class CountSessionController:
     def idle_fields(self, detail="no_active_session"):
         """Respuesta de equipo sin sesion: nunca arrastra conteos anteriores."""
         return self.response_fields(
-            "IDLE",
-            detail=detail,
+            "ERROR" if self.result_lookup_failed else "IDLE",
+            detail="result_lookup_failed" if self.result_lookup_failed else detail,
             session="none",
             alive=False,
             count=None,
@@ -1143,16 +1196,17 @@ class CountSessionController:
     def result_response(self, status="RESULT"):
         result = self.last_result or {}
         stored_status = str(result.get("status", "")).upper()
-        response_status = "ERROR" if stored_status == "ERROR" else status
+        durable = result.get("persisted", True)
+        response_status = "ERROR" if not result or stored_status == "ERROR" or not durable else status
         return {
             "status": response_status,
             "session": str(result.get("session", self.session_id())),
             "alive": "false",
             "elapsed": str(result.get("elapsed", self.elapsed_sec())),
             "pid": str(result.get("pid", self.pid_value())),
-            "count": self.count_text(result.get("count", self.current_count())),
+            "count": self.count_text(result.get("count")) if response_status != "ERROR" else "unknown",
             "reason": str(result.get("reason", self.current_reason() or "unknown")),
-            "detail": str(result.get("detail", "result")),
+            "detail": str(result.get("detail", "result")) if durable else "result_persistence_failed",
             "completed": str(result.get("completed", "")),
         }
 
@@ -1184,6 +1238,8 @@ class CountSessionController:
     def elapsed_sec(self):
         if self.session is None:
             return 0
+        if self.session.get("started_monotonic") is not None and not self.session.get("end_time"):
+            return int(max(0, time.monotonic() - self.session["started_monotonic"]))
         end_time = self.session.get("end_time") or time.time()
         return int(max(0, end_time - self.session["start_time"]))
 
@@ -1237,7 +1293,7 @@ class CountSessionController:
 
     @staticmethod
     def new_session_id():
-        return f"C{int(time.time())}"
+        return uuid.uuid4().hex
 
     @staticmethod
     def count_text(value):
@@ -1369,14 +1425,6 @@ def maybe_reply_to_secure_command(rx, payload):
     return True
 
 
-def build_count_response(msg_id, fields):
-    safe_fields = []
-    for key, value in fields.items():
-        safe_value = clean_field(value, fallback="unknown", max_length=48)
-        safe_fields.append(f"{key}={safe_value}")
-    return f"RESP|{msg_id}|JETSON_COUNT|" + "|".join(safe_fields)
-
-
 def send_response(rx, response, label):
     print(f"LoRa TX: {response}")
     sent_count = 0
@@ -1396,57 +1444,36 @@ def send_response(rx, response, label):
 
 
 def maybe_reply_to_command(rx, payload):
+    """Procesa un paquete LoRa recibido.
+
+    Solo se ejecutan tramas C1 autenticadas. Cualquier otra trama se registra y
+    se descarta: el enlace LoRa es alcanzable por cualquier emisor cercano, por
+    lo que el equipo no debe aceptar comandos sin firma (tampoco del protocolo
+    heredado `BRIDGE`/`CMD:` de la etapa ESP8266).
+    """
     frame = payload.strip()
     if frame.startswith("C1|"):
-        if maybe_reply_to_secure_command(rx, frame):
-            return
+        maybe_reply_to_secure_command(rx, frame)
+        return
     if frame.startswith("R1|"):
         print("[LoRa] Eco/respuesta propia ignorada.")
         return
+    prefix = frame.split("|", 1)[0][:16]
+    print(
+        f"[Seguro] Trama sin firma C1 descartada (prefijo={prefix!r}); "
+        "solo se aceptan comandos C1/R1 autenticados."
+    )
 
-    parts = frame.split("|")
-    command = parts[0].upper() if parts else ""
-    msg_id = "0"
 
-    legacy_commands = {
-        "BRIDGE",
-        "ESTADO",
-        "PREPARARCONTEO",
-        "INICIARCONTEO",
-        "DETENERCONTEO",
-        "ESTADOCONTEO",
-        "RESULTADOCONTEO",
-    }
-    if command not in legacy_commands:
-        print("[LoRa] Paquete no reconocido ignorado.")
-        return
+def shutdown_signal_handler(signum, frame):
+    """SIGTERM del servicio -> KeyboardInterrupt para limpiar en `finally`.
 
-    if command == "BRIDGE" and len(parts) >= 3:
-        msg_id = parts[1] if parts[1].isdigit() else "0"
-        command = parts[2].upper()
-    elif len(parts) >= 2 and parts[1].isdigit():
-        msg_id = parts[1]
-
-    if command == "ESTADO":
-        response = build_jetson_status_response(msg_id)
-        send_response(rx, response, "ESTADO")
-        return
-
-    count_commands = {
-        "PREPARARCONTEO": count_controller.prepare,
-        "INICIARCONTEO": count_controller.start,
-        "DETENERCONTEO": count_controller.stop,
-        "ESTADOCONTEO": count_controller.status,
-        "RESULTADOCONTEO": count_controller.result,
-    }
-    if command in count_commands:
-        print(f"[Comando] {command} recibido msg_id={msg_id}")
-        fields = count_commands[command]()
-        response = build_count_response(msg_id, fields)
-        send_response(rx, response, command)
-        return
-
-    print(f"[Comando] Sin accion para payload: {payload}")
+    Con el manejador por defecto el proceso moria de inmediato: el `finally`
+    de `main` no se ejecutaba y el worker de conteo quedaba huerfano,
+    reteniendo camara y GPU. Al convertirlo en KeyboardInterrupt, `main`
+    detiene el worker y cierra el SPI antes de salir.
+    """
+    raise KeyboardInterrupt
 
 
 def parse_args():
@@ -1577,6 +1604,11 @@ def parse_args():
         default=COUNT_STOP_TIMEOUT_SEC,
         help="Segundos para esperar SIGTERM antes de SIGKILL.",
     )
+    parser.add_argument("--count-tracker", choices=["simple", "botsort", "bytetrack", "ocsort", "none"], default="botsort")
+    parser.add_argument("--count-allow-tracker-fallback", action="store_true")
+    parser.add_argument("--count-input-layout", choices=["auto", "nhwc", "nchw"], default="auto")
+    parser.add_argument("--count-normalization", choices=["raw", "zero_one", "minus_one_one"], default="raw")
+    parser.add_argument("--count-class-id", type=int, action="append")
     # Obsoletos: el RST del SX1278 va puenteado a 3.3 V (pin 17) y ya no se
     # controla por GPIO. Se siguen aceptando para no romper unidades systemd
     # existentes que aun los pasen, pero se ignoran por completo.
@@ -1590,11 +1622,18 @@ def parse_args():
         default=LORA_INIT_ATTEMPTS,
         help="Cantidad de intentos de configuracion antes de fallar.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.count_max_duration <= 0 or args.count_stop_timeout < 3:
+        parser.error("count-max-duration debe ser positivo y count-stop-timeout al menos 3 segundos")
+    return args
 
 
 def main():
     args = parse_args()
+    # Un SIGTERM del servicio debe pasar por la limpieza del `finally`:
+    # detener el worker y liberar SPI. Sin manejador, Python terminaba el
+    # proceso sin ejecutar la limpieza.
+    signal.signal(signal.SIGTERM, shutdown_signal_handler)
     global SPI_SPEED_HZ, SPI_BUS, SPI_DEV
     global TX_POWER_DBM
     global LORA_INIT_ATTEMPTS
@@ -1604,6 +1643,7 @@ def main():
     global COUNT_CSI_FPS, COUNT_CSI_FLIP, COUNT_NO_DISPLAY
     global COUNT_DISPLAY_WIDTH, COUNT_DISPLAY_HEIGHT
     global COUNT_MAX_DURATION_SEC, COUNT_STOP_TIMEOUT_SEC
+    global COUNT_WORKER_OPTIONS
     if (
         args.use_gpio_rst
         or args.rst_gpio_line is not None
@@ -1635,6 +1675,15 @@ def main():
     COUNT_LOG_PATH = args.count_log
     COUNT_MAX_DURATION_SEC = args.count_max_duration
     COUNT_STOP_TIMEOUT_SEC = args.count_stop_timeout
+    COUNT_WORKER_OPTIONS = [
+        "--tracker", args.count_tracker,
+        "--input-layout", args.count_input_layout,
+        "--normalization", args.count_normalization,
+    ]
+    for class_id in args.count_class_id or []:
+        COUNT_WORKER_OPTIONS.extend(["--class-id", str(class_id)])
+    if args.count_allow_tracker_fallback:
+        COUNT_WORKER_OPTIONS.append("--allow-tracker-fallback")
 
     rx = SX1278Receiver(
         crc_enabled=not args.crc_off,
@@ -1648,12 +1697,12 @@ def main():
         except ValueError as exc:
             print(f"No se pudo activar la seguridad IoT: {exc}")
             print("Configura IOT_SHARED_SECRET con 64 caracteres hexadecimales.")
-            return
+            return 1
 
         if not rx.begin():
             print("No se pudo inicializar el SX1278.")
             print("Revisa el mensaje [SPI], [GPIO] o [LoRa] anterior para conocer la causa.")
-            return
+            return 1
 
         print("SX1278 inicializado correctamente.")
         print("Si no aparecen paquetes, revisa que el ESP32 imprima:")
@@ -1694,13 +1743,21 @@ def main():
     except KeyboardInterrupt:
         print("\nSaliendo...")
     finally:
-        if count_controller.is_worker_alive():
-            count_controller.stop(reason="controller_shutdown")
-        count_controller.close_log_file()
-        if secure_protocol is not None:
-            secure_protocol.close()
-        rx.close()
+        # Señales repetidas no deben interrumpir la liberación del SPI.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            if count_controller.is_worker_alive():
+                count_controller.stop(reason="controller_shutdown")
+        finally:
+            count_controller.close_log_file()
+            try:
+                if secure_protocol is not None:
+                    secure_protocol.close()
+            finally:
+                rx.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

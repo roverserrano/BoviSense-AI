@@ -2,6 +2,7 @@ import importlib.util
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import types
@@ -171,6 +172,164 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(result["detail"], "session_mismatch")
         self.assertEqual(result["count"], "unknown")
 
+    def test_status_after_finish_reports_availability_without_count(self):
+        # H no debe arrastrar el ultimo STOPPED con su conteo: el backend
+        # rechaza un terminal sin sesion ("Fecha de finalizacion invalida").
+        controller = self.module.CountSessionController()
+        controller.session = {
+            "id": ID, "status": "STOPPED", "start_time": 0,
+            "end_time": 1, "count": 7,
+        }
+        controller.last_result = {
+            "session": ID, "status": "STOPPED", "count": 7,
+            "completed": NOW - 10, "reason": "stopped_by_app", "detail": "ok",
+        }
+        with patch.object(controller, "sync_worker_state"), patch.object(controller, "is_worker_alive", return_value=False):
+            result = controller.status()
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["count"], "unknown")
+        self.assertEqual(result["detail"], "available")
+
+    def test_status_during_count_does_not_leak_live_count(self):
+        controller = self.module.CountSessionController()
+        controller.session = {
+            "id": ID, "status": "RUNNING", "start_time": 0, "count": 4,
+        }
+        with patch.object(controller, "sync_worker_state"), patch.object(controller, "is_worker_alive", return_value=True):
+            result = controller.status()
+        self.assertEqual(result["status"], "RUNNING")
+        self.assertEqual(result["count"], "unknown")
+
+    def test_query_of_finished_session_keeps_original_completed(self):
+        controller = self.module.CountSessionController()
+        controller.session = {
+            "id": ID, "status": "STOPPED", "start_time": 0,
+            "end_time": 1, "count": 7,
+        }
+        controller.last_result = {
+            "session": ID, "status": "STOPPED", "count": 7,
+            "completed": NOW - 10, "reason": "stopped_by_app", "detail": "ok",
+        }
+        with patch.object(controller, "sync_worker_state"), patch.object(controller, "is_worker_alive", return_value=False):
+            result = controller.status(requested_session=ID)
+        self.assertEqual(result["status"], "STOPPED")
+        self.assertEqual(result["count"], "7")
+        self.assertEqual(result["completed"], str(NOW - 10))
+
+    def test_forced_termination_is_error_not_silent_final(self):
+        # BOV-HIGH-004: un worker que no atiende SIGTERM no puede terminar en
+        # STOPPED con el ultimo acumulado: la app lo guardaria como final.
+        controller = self.module.CountSessionController()
+        stubborn = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal, sys, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('ready', flush=True); time.sleep(60)",
+            ],
+            stdout=subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            # Espera a que el hijo instale SIG_IGN antes de intentar detenerlo;
+            # de lo contrario el SIGTERM lo mata y la prueba no simula el caso.
+            self.assertEqual(stubborn.stdout.readline().strip(), b"ready")
+            controller.session = {
+                "id": ID, "status": "RUNNING", "start_time": 0, "count": 7,
+                "status_file": "/nonexistent/status.json",
+                "result_file": "/nonexistent/result.json",
+                "log_offset": 0,
+            }
+            controller.process = stubborn
+            with patch.object(self.module, "COUNT_STOP_TIMEOUT_SEC", 0.2), \
+                 patch.object(self.module, "COUNT_LOG_PATH", "/nonexistent/run.log"), \
+                 redirect_stdout(StringIO()):
+                result = controller.stop(requested_session=ID)
+            self.assertEqual(result["status"], "ERROR")
+            self.assertEqual(result["count"], "unknown")
+            self.assertEqual(controller.last_result["reason"], "killed_after_timeout")
+            self.assertEqual(controller.last_result["detail"], "forced_termination")
+        finally:
+            if stubborn.poll() is None:
+                stubborn.kill()
+            stubborn.wait(timeout=5)
+            stubborn.stdout.close()
+
+    def test_terminated_process_without_final_confirmation_is_error(self):
+        # SIGTERM sin manejador ni evidencia final no es una detencion limpia.
+        controller = self.module.CountSessionController()
+        graceful = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            start_new_session=True,
+        )
+        try:
+            controller.session = {
+                "id": ID, "status": "RUNNING", "start_time": 0, "count": 7,
+                "status_file": "/nonexistent/status.json",
+                "result_file": "/nonexistent/result.json",
+                "log_offset": 0,
+            }
+            controller.process = graceful
+            with patch.object(self.module, "COUNT_STOP_TIMEOUT_SEC", 2), \
+                 patch.object(self.module, "COUNT_LOG_PATH", "/nonexistent/run.log"), \
+                 redirect_stdout(StringIO()):
+                result = controller.stop(requested_session=ID)
+            self.assertEqual(result["status"], "ERROR")
+            self.assertEqual(result["count"], "unknown")
+        finally:
+            if graceful.poll() is None:
+                graceful.kill()
+            graceful.wait(timeout=5)
+
+    def test_finished_result_is_persisted_and_recovered_after_restart(self):
+        # BOV-HIGH-003: el final debe sobrevivir un reinicio del receptor y
+        # R/T deben recuperarlo con su fecha original.
+        with tempfile.TemporaryDirectory() as directory:
+            protocol = SecureProtocol(KEY, Path(directory) / "protocol.db")
+            previous_protocol = self.module.secure_protocol
+            previous_log = self.module.COUNT_LOG_PATH
+            try:
+                self.module.secure_protocol = protocol
+                controller = self.module.CountSessionController()
+                controller.session = {
+                    "id": ID, "status": "RUNNING", "start_time": 0, "count": 7,
+                    "status_file": "/nonexistent/status.json",
+                    "result_file": "/nonexistent/result.json",
+                    "log_offset": 0,
+                }
+                self.module.COUNT_LOG_PATH = "/nonexistent/run.log"
+                with redirect_stdout(StringIO()):
+                    controller.finish_session("stopped_by_app", status="STOPPED")
+                stored = protocol.result(ID)
+                self.assertEqual(stored["status"], "STOPPED")
+                self.assertEqual(stored["count"], 7)
+                self.assertGreater(stored["completed"], 0)
+
+                # "Reinicio": controlador nuevo, sin sesion ni last_result.
+                fresh = self.module.CountSessionController()
+                with patch.object(fresh, "sync_worker_state"), patch.object(fresh, "is_worker_alive", return_value=False):
+                    retrieved = fresh.result(requested_session=ID)
+                self.assertEqual(retrieved["status"], "RESULT")
+                self.assertEqual(retrieved["count"], "7")
+                self.assertEqual(retrieved["session"], ID)
+                self.assertEqual(retrieved["completed"], str(stored["completed"]))
+
+                # Repetir DETENERCONTEO tras el reinicio devuelve el mismo final.
+                second = self.module.CountSessionController()
+                with patch.object(second, "sync_worker_state"), patch.object(second, "is_worker_alive", return_value=False):
+                    stopped = second.stop(requested_session=ID)
+                self.assertEqual(stopped["status"], "STOPPED")
+                self.assertEqual(stopped["count"], "7")
+            finally:
+                self.module.secure_protocol = previous_protocol
+                self.module.COUNT_LOG_PATH = previous_log
+                protocol.close()
+
+    def test_shutdown_handler_requests_clean_exit(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.module.shutdown_signal_handler(self.module.signal.SIGTERM, None)
+
     def test_worker_launch_does_not_use_a_shell(self):
         self.assertIsInstance(self.module.CountSessionController().build_shell_command(), list)
 
@@ -222,6 +381,35 @@ class ControllerTests(unittest.TestCase):
             result = self.module.execute_secure_command("S", session)
             self.assertEqual(calls, [session])
             self.assertEqual(result["status"], "STARTED")
+        finally:
+            self.module.count_controller = previous_controller
+
+    def test_unsigned_frames_never_execute_commands(self):
+        """El enlace LoRa es alcanzable: sin firma C1 no debe pasar nada."""
+        controller = self.module.CountSessionController()
+        calls = []
+        for name in ("prepare", "start", "stop", "status", "result"):
+            def recorder(*args, _name=name, **kwargs):
+                calls.append(_name)
+                return {"status": "READY", "count": "unknown"}
+
+            setattr(controller, name, recorder)
+
+        previous_controller = self.module.count_controller
+        try:
+            self.module.count_controller = controller
+            radio = FakeRadio()
+            for frame in (
+                "BRIDGE|17|INICIARCONTEO",   # protocolo heredado ESP8266
+                "INICIARCONTEO",             # comando suelto
+                "ESTADO|16",                 # estado heredado
+                "CMD:INICIARCONTEO",         # protocolo previo de la app
+                "R1|0abcdef|xyz",            # respuesta malformada
+            ):
+                with redirect_stdout(StringIO()):
+                    self.module.maybe_reply_to_command(radio, frame)
+            self.assertEqual(calls, [], "una trama sin firma no debe ejecutar comandos")
+            self.assertEqual(radio.sent, [], "una trama sin firma no debe transmitir")
         finally:
             self.module.count_controller = previous_controller
 
@@ -309,7 +497,8 @@ class RadioModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             first = self.radio()
             second = self.radio()
-            with patch.object(self.module, "SPI_LOCK_DIRECTORY", directory):
+            lock_directory = str(Path(directory) / "private-lock")
+            with patch.object(self.module, "SPI_LOCK_DIRECTORY", lock_directory):
                 self.assertTrue(first.acquire_spi_lock())
                 self.assertFalse(second.acquire_spi_lock())
                 first.close()
