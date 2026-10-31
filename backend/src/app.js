@@ -37,6 +37,12 @@ app.use((req, res, next) => {
     next();
 });
 
+app.get('/', (_, res) => res.json({
+    service: 'bovisense-ai-backend',
+    status: 'ok',
+    health: '/health',
+}));
+
 let healthCheck;
 let checkedAt = 0;
 app.get('/health', async (_, res) => {
