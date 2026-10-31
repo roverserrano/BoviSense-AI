@@ -168,7 +168,7 @@ class TrackerFactoryTests(unittest.TestCase):
         self.assertIsInstance(tracker, MODULE.LegacyUniqueBovineTracker)
 
     def test_external_tracker_degrades_explicitly_without_library(self):
-        tracker = MODULE.create_tracker("botsort", min_box_px=10.0, **self.common)
+        tracker = MODULE.create_tracker("botsort", min_box_px=10.0, allow_fallback=True, **self.common)
         self.assertIn(
             tracker.engine_name,
             ("roboflow_botsort", "internal_persistent"),

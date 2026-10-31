@@ -139,7 +139,7 @@ sudo fuser -v /dev/spidev0.0
 | Ruta de trabajo | `/home/cow/Documents/Script/` | `jetson/lora_jetson_rx.py:48-51`, `jetson/README.md` |
 | Entorno Python del worker | `/home/cow/Documents/Script/env_detection/bin/python3` | `jetson/lora_jetson_rx.py:49` |
 | Engine TensorRT | `/home/cow/Documents/proyecto/modelos/model_fp32.engine` (fuera del repositorio) | `jetson/lora_jetson_rx.py:51` |
-| Variables del servicio | `EnvironmentFile=/etc/bovisense/iot.env` con `IOT_SHARED_SECRET` y, opcionalmente, `BOVISENSE_STATE_DIR` | `AGENTS.md` sección 4; `jetson/secure_protocol.py:16` |
+| Variables del servicio | `EnvironmentFile=/etc/bovisense/iot.env` con `IOT_SHARED_SECRET` y, opcionalmente, `BOVISENSE_STATE_DIR` / `BOVISENSE_SPI_LOCK_DIRECTORY` | `AGENTS.md` sección 4; `jetson/secure_protocol.py:16` |
 | Log sin buffer | Drop-in `jetson/systemd/unbuffered.conf` → `/etc/systemd/system/bovisense-lora.service.d/` | `jetson/systemd/unbuffered.conf:1-2` |
 | Estado antirreplay | `~/.local/state/bovisense/protocol.sqlite3` (no borrar) | `jetson/secure_protocol.py:64-70` |
 

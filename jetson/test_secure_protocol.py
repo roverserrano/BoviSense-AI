@@ -256,7 +256,8 @@ class ControllerTests(unittest.TestCase):
             stubborn.wait(timeout=5)
             stubborn.stdout.close()
 
-    def test_graceful_stop_still_reports_stopped_with_count(self):
+    def test_terminated_process_without_final_confirmation_is_error(self):
+        # SIGTERM sin manejador ni evidencia final no es una detencion limpia.
         controller = self.module.CountSessionController()
         graceful = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -274,8 +275,8 @@ class ControllerTests(unittest.TestCase):
                  patch.object(self.module, "COUNT_LOG_PATH", "/nonexistent/run.log"), \
                  redirect_stdout(StringIO()):
                 result = controller.stop(requested_session=ID)
-            self.assertEqual(result["status"], "STOPPED")
-            self.assertEqual(result["count"], "7")
+            self.assertEqual(result["status"], "ERROR")
+            self.assertEqual(result["count"], "unknown")
         finally:
             if graceful.poll() is None:
                 graceful.kill()
@@ -496,7 +497,8 @@ class RadioModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             first = self.radio()
             second = self.radio()
-            with patch.object(self.module, "SPI_LOCK_DIRECTORY", directory):
+            lock_directory = str(Path(directory) / "private-lock")
+            with patch.object(self.module, "SPI_LOCK_DIRECTORY", lock_directory):
                 self.assertTrue(first.acquire_spi_lock())
                 self.assertFalse(second.acquire_spi_lock())
                 first.close()

@@ -90,3 +90,20 @@ jobs:
       - name: Logica de tracking y conteo
         working-directory: jetson
         run: python -m unittest test_tracking_logic.py
+      - name: Recuperacion de captura, procesos y persistencia
+        working-directory: jetson
+        run: python -m unittest test_runtime_reliability.py
+
+  iot-contract:
+    name: Contrato IoT (C++, Python y Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Transporte, firmas y reintentos sin hardware
+        run: python -B -m unittest discover -s comunicacion-iot/tests -p 'test_*.py'

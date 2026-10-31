@@ -8,7 +8,30 @@ Nota: el proyecto todavía no publica versiones etiquetadas (`git tag` está
 vacío). Las entradas se agrupan por fecha y citan el commit final del bloque,
 en la rama `dev`. Las fechas están en formato ISO.
 
-## [No publicado] — cambios locales al 2026-10-17
+## [No publicado] — cambios locales al 2026-10-31
+
+### Integracion ESP32, Jetson y app (2026-10-31, sin despliegue)
+
+- Puente `bovisense-c1r1-2.0`: SPI solo desde `loop()`, TX asincrona con
+  limite de 3 s, hasta tres envios del mismo C1 dentro de 22 s, colas y
+  buffers acotados. Desconexion invalida comandos viejos; se conserva la
+  segunda R1 para recuperar notificaciones incompletas. Brownout permanece
+  habilitado. Pines, UUID y parametros RF conservados.
+- App: fragmentos con vencimiento, correlacion por solicitud y sesion,
+  escritura BLE limitada a 5 s y espera R1 de 25 s posterior a la escritura.
+  Una cancelacion no se presenta como exito ni altera la nueva conexion.
+- Backend: un H emitido antes de una nueva reserva no puede liberarla;
+  respuestas de consultas anteriores no sobrescriben un estado mas reciente
+  segun el orden de emision registrado en el ticket.
+- Jetson: errores de camara/inferencia sin resultado exitoso, cierre acotado,
+  JSON atomico, liberacion de recursos y persistencia obligatoria del final.
+  Validacion explicita del motor TensorRT y parametros de entrada; resultados
+  historicos recuperables sin arrastrarlos a otra sesion.
+- Pruebas nuevas de transporte C++, contrato Node/Python/C++, sesiones del
+  backend, fragmentacion BLE y recuperacion del worker. Suites incorporadas a
+  CI. Sketch compilado localmente con ESP32 3.3.8 y LoRa 0.8.0; validacion
+  fisica pendiente. Procedimiento en
+  `comunicacion-iot/docs/validacion-integracion.md`.
 
 ### Añadido
 

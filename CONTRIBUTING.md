@@ -82,9 +82,13 @@ Estado esperado: 4 unitarias de backend, 12 de integración, 32 en Flutter,
 
 ## Integración continua
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) ejecuta cuatro jobs sin
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) define cinco jobs sin
 secretos: backend unitario, backend con emuladores, Flutter (`analyze` +
-`test`) y Jetson (`unittest`). Un Pull Request debe pasar los cuatro.
+`test`), Jetson (protocolo, tracking y recuperacion) y contrato IoT entre
+C++, Python y Node. Un Pull Request debe pasar los cinco. El contrato IoT
+prueba el nucleo de transporte; la compilacion del sketch completo y la
+validacion fisica se describen en
+[`validacion-integracion.md`](comunicacion-iot/docs/validacion-integracion.md).
 
 ## ¿Dudas?
 
