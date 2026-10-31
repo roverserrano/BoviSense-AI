@@ -39,6 +39,12 @@ curl http://127.0.0.1:3000/health
 
 Consideraciones detectadas para serverless:
 
+- **Compatibilidad CommonJS (Vercel/Node 24).** `firebase-admin` debe
+  permanecer en `13.x`: la rama `14.x` arrastra `jwks-rsa@4` → `jose@6`
+  (solo ESM) y el runtime serverless falla al cargar la función con
+  `ERR_REQUIRE_ESM`, devolviendo `500 FUNCTION_INVOCATION_FAILED` en todas las
+  rutas. Antes de subir de versión mayor, validar con
+  `npm --prefix backend run check:runtime`.
 - El manejador de salud cachea 15 s (`backend/src/app.js:40-49`), adecuado para
   instancias efímeras.
 - El límite de 120 req/min por IP con `trust proxy` agrupa a los clientes detrás

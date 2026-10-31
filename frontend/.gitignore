@@ -53,3 +53,5 @@ firebase.json
 
 README.md
 run_usb.sh
+.vercel
+.env*
