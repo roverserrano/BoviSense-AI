@@ -98,7 +98,7 @@ saltos de ancho.
 - Separación entre tarjetas: 10–12; entre secciones: 16.
 - Radios: 12 (controles), 16 (tarjetas), 20 (diálogos), 999 (pills).
 - Profundidad: tarjetas con borde de 1 px, sin sombra; sombra sol suave solo en
-  elementos flotantes (barra inferior, FAB, tarjeta de próximo paso).
+  elementos flotantes (barra inferior, tarjeta de próximo paso).
 
 ## 5. Componentes
 
@@ -112,8 +112,10 @@ saltos de ancho.
 | `StopButton` | Acción de detener conteo (tonal rojo) | normal, deshabilitado |
 | `StatusBar` | Estado principal de pantalla con punto y subtítulo | pending, ready, inProgress, finished, error |
 | `StatusBanner` / `AlertCard` | Mensaje con icono, título y detalle | info, success, warning, error |
-| `StatusChip` | Etiqueta corta de estado | color semántico + texto |
+| `StatusChip` | Etiqueta corta de estado | color semántico + texto, punto opcional |
 | `StatCard` | Métrica con número y etiqueta | normal, con chip |
+| `FilterChipRow` | Filtros del panel de administración | seleccionado, normal; contador por categoría |
+| `UserCard` | Tarjeta de usuario del panel | activo, desactivado, operación pendiente |
 | `EmptyState` | Estado vacío con icono, título y acción | normal |
 | `ResultHero` | Resultado del conteo con métricas | en curso, final |
 | `StepFlowItem` | Paso del flujo de conteo | completado, activo, pendiente |

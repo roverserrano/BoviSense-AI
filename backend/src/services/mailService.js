@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 
-async function enviarActivacion({ correo, nombreCompleto, enlace }) {
+async function enviarActivacion({ correo, nombreCompleto, contrasenaInicial }) {
+    if (typeof contrasenaInicial !== 'string' || !contrasenaInicial.trim()) throw new Error('mail/initial-password-missing');
     for (const name of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM']) {
         if (!process.env[name]) throw new Error('mail/configuration-missing');
     }
@@ -20,8 +21,8 @@ async function enviarActivacion({ correo, nombreCompleto, enlace }) {
         const result = await transporter.sendMail({
             from: process.env.SMTP_FROM,
             to: correo,
-            subject: 'Establece tu contrasena - BoviSense',
-            text: `Hola ${nombreCompleto},\n\nTu cuenta de BoviSense esta disponible. Establece tu contrasena en este enlace de Firebase:\n${enlace}\n\nSi el enlace vence, usa Recuperar contrasena en la aplicacion.`,
+            subject: 'Tus credenciales de acceso - BoviSense',
+            text: `Hola ${nombreCompleto},\n\nTu cuenta de BoviSense está lista. Ingresa a la aplicación con estas credenciales:\n\nUsuario (correo): ${correo}\nContraseña inicial: ${contrasenaInicial}\n\nUna vez dentro, abre Opciones de sesión > Cambiar contraseña para elegir tu propia contraseña. Usa la contraseña inicial como contraseña actual.\n\nConserva estas credenciales en privado. Si olvidas tu contraseña, utiliza Recuperar contraseña en la aplicación.`,
         });
         if (!result.accepted?.length) throw new Error('mail/not-accepted');
     } finally {

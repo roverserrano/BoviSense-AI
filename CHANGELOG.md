@@ -82,7 +82,13 @@ en la rama `dev`. Las fechas están en formato ISO.
   espacio; prueba de regresión incluida) y el logo de la app se recortó a un
   PNG transparente 1024×1024 sin el marco gris ni la marca de agua del lienzo
   original.
-- La app quedó con **44/44** casos (`flutter analyze` sin hallazgos). Backend y
+- Panel de administración rediseñado sobre la maqueta de referencia: cabecera
+  con título y botón "Nuevo usuario" (en lugar del FAB), tarjetas compactas de
+  resumen (cuentas, activos, inactivos), buscador de una línea, filtros con
+  contador y punto de color, tarjetas de usuario con avatar cuadrado, chip de
+  estado con punto, teléfono y rol, aviso de cuenta desactivada y pie
+  "Mostrando X de Y cuentas registradas".
+- La app quedó con **46/46** casos (`flutter analyze` sin hallazgos). Backend y
   Jetson no se tocaron en esta tarea.
 
 ## [2026-10-12] — `b94fcda`

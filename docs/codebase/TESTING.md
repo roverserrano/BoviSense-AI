@@ -46,7 +46,7 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-a
 |--------|-----------|--------------|-------|
 | Backend unitario | `backend/test/security.test.js` | `<tema>.test.js` | 4 |
 | Backend integración | `backend/test/integration/api.test.js` | `<tema>.test.js` bajo `integration/` | 15 |
-| App | `frontend/test/**` | `<tema>_test.dart` | 44 |
+| App | `frontend/test/**` | `<tema>_test.dart` | 46 |
 | Jetson (receptor y protocolo) | `jetson/test_secure_protocol.py` | `test_<tema>.py` | 29 |
 | Jetson (tracking y conteo) | `jetson/test_tracking_logic.py` | `test_<tema>.py` | 9 |
 
@@ -72,7 +72,7 @@ autoabastece de dobles.
 
 | Scope | Covered? | Typical target | Notes |
 |-------|----------|----------------|-------|
-| Unit | Sí | Validación, protocolo C1/R1, utilidades de cajas, cola de comandos, formateadores, contraste de tokens | Backend 4; app 44; Jetson 29 |
+| Unit | Sí | Validación, protocolo C1/R1, utilidades de cajas, cola de comandos, formateadores, contraste de tokens | Backend 4; app 46; Jetson 29 |
 | Integration | Sí | API completa contra emuladores de Firebase; receptor con SPI simulado | 15 casos de backend; las pruebas de la Jetson simulan el SX1278 |
 | E2E (dispositivo real) | No | Flujo `H → S → Q → T → R` con radio, cámara y teléfono | PENDIENTE DE VERIFICACIÓN: requiere hardware (`AGENTS.md`, secciones 6 y 8) |
 
@@ -104,7 +104,7 @@ autoabastece de dobles.
 - Última ejecución del backend y la Jetson (2026-10-17): backend unitario en
   verde, **15/15** integración, **29/29** receptor y **9/9** tracking;
   `py_compile` de los tres scripts de la Jetson. La app se revalidó el
-  2026-10-18: `flutter analyze` sin hallazgos y **44/44** casos.
+  2026-10-18: `flutter analyze` sin hallazgos y **46/46** casos.
 - Huecos conocidos: sin pruebas de UI end-to-end, sin pruebas de resiliencia de
   red, sin cobertura instrumentada y sin prueba de la publicación de hooks del
   worker (`COUNT_UPDATE`/`COUNT_FINAL` se verifican de forma indirecta).
@@ -117,7 +117,7 @@ autoabastece de dobles.
 
 - `backend/package.json:6-11`, `backend/test/security.test.js`,
   `backend/test/integration/api.test.js`
-- `frontend/test/` (10 archivos, 44 casos)
+- `frontend/test/` (10 archivos, 46 casos)
 - `jetson/test_secure_protocol.py` (29 casos)
 - `docs/codebase/.codebase-scan.txt` (sección PERFORMANCE & TESTING)
 - `AGENTS.md` sección 8 (resultados de la última corrida)

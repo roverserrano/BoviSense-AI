@@ -71,8 +71,8 @@ async function crearUsuario(req, res) {
             usuario: normalizeUsuario(uid, result.user),
             activation_pending: result.activationPending,
             message: result.activationPending
-                ? 'Cuenta creada. No se pudo enviar el enlace; el usuario puede usar Recuperar contrasena.'
-                : 'Cuenta creada. Se envio un enlace para establecer la contrasena.',
+                ? 'Usuario creado. Correo no enviado.'
+                : 'Usuario creado correctamente.',
         });
     } catch (error) { return respondError(res, error); }
 }

@@ -42,7 +42,27 @@ npm test
 npm audit
 ```
 
-El alta crea una credencial aleatoria interna y envia un enlace de Firebase para establecer la contraseña. Si SMTP falla, la cuenta permanece recuperable mediante "Recuperar contraseña" y la respuesta administrativa lo indica.
+El alta crea una contraseña inicial con la inicial del primer nombre y el primer
+apellido, en minusculas y sin tildes: `Pedro Carbon` produce `pcarbon`. Si el
+resultado tiene menos de seis caracteres, se completa con ceros a la derecha
+para cumplir el minimo de Firebase (`Ana Li` produce `ali000`). Se configura
+esa contraseña en Firebase Authentication y se envia al correo registrado junto
+con el usuario (correo). El usuario
+ingresa directamente a BoviSense y puede elegir su propia contraseña desde
+"Opciones de sesión > Cambiar contraseña", usando la inicial como contraseña
+actual. El correo de alta no contiene un enlace de restablecimiento.
+
+La contraseña inicial solo se mantiene en memoria durante el alta: no se guarda
+en Firestore, no se devuelve a la app administrativa ni se escribe en logs. Si
+se retoma un alta incompleta que ya creo la cuenta en Authentication, se calcula
+la misma contraseña inicial y se actualiza antes de enviarla, para que el
+correo coincida con la credencial vigente. Repetir un alta ya completada no
+restablece la contraseña ni vuelve a enviar el correo.
+
+Si SMTP falla, la cuenta permanece creada y recuperable mediante "Recuperar
+contraseña". La respuesta administrativa indica que las credenciales no se
+pudieron enviar y conserva `activation_pending: true`. No hay reenvio automatico
+de los correos pendientes ni cambios retroactivos para cuentas ya creadas.
 
 ## Firestore
 

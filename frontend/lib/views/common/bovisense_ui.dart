@@ -121,11 +121,16 @@ class StatusChip extends StatelessWidget {
     required this.label,
     required this.color,
     this.icon,
+    this.dot = false,
   });
 
   final String label;
   final Color color;
   final IconData? icon;
+
+  /// Punto de color delante del texto (además de la palabra, nunca en su
+  /// lugar).
+  final bool dot;
 
   @override
   Widget build(BuildContext context) {
@@ -138,6 +143,14 @@ class StatusChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (dot) ...[
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 5),
+          ],
           if (icon != null) ...[
             Icon(icon, size: 12, color: color),
             const SizedBox(width: 4),

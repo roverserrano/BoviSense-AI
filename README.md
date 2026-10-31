@@ -17,7 +17,7 @@ El objetivo es claro: reducir errores manuales en conteos, detectar diferencias 
 ### Módulo Administrador
 - Gestión completa de usuarios.
 - Asignación de rol (`administrador` o `usuario`) y estado (`activo` o `inactivo`).
-- Generación automática de contraseña inicial y envío de credenciales por correo SMTP.
+- Contraseña inicial formada por la inicial del nombre y el primer apellido (`Pedro Carbon` → `pcarbon`), enviada por correo; el usuario puede cambiarla dentro de la aplicación.
 - Búsqueda y filtros por estado/rol.
 
 ### Módulo Ganadero
